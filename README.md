@@ -44,7 +44,7 @@ A self-hostable ICQ server.
 
 ```bash
 git clone https://github.com/Artemchik-Development/node-icq-server.git
-cd icq-server
+cd node-icq-server
 npm install
 npm start
 ```
