@@ -46,3 +46,23 @@ A self-hostable ICQ server.
 git clone https://github.com/Artemchik-Development/node-icq-server.git
 cd icq-server
 npm install
+npm start
+```
+## User registration
+
+# Basic registration
+node database.js add 1000 password
+
+# Full registration with details
+node database.js add 1000 mypass Alice Alice Smith alice@mail.com
+
+# List all users
+node database.js list
+
+# Search users
+node database.js search Alice
+
+# Delete user
+node database.js del 1000
+
+
