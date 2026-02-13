@@ -1,7 +1,7 @@
 # node-icq-server
 A self-hostable ICQ server.
 
-## ✨ Features
+## Features
 
 ### Core Protocol
 - **Dual Authentication** — MD5 (BUCP) + XOR Roasting
