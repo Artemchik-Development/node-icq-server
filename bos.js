@@ -80,31 +80,6 @@ const STATUS_NAMES = {
     0x0004: 'NA', 0x0010: 'Occupied', 0x0020: 'Free4Chat', 0x0100: 'Invisible',
 };
 
-// ═══════════════════════════════════════════
-//  Полная последовательность входа:
-//
-//  1.  BOS Hello (FLAP Ch1)              → server.js
-//  2.  SRV_FAMILIES (01,03)              → server.js
-//  3.  CLI_FAMILIES_VERSIONS (01,17)     → SRV_VERSIONS (01,18)
-//  4.  CLI_RATE_REQUEST (01,06)          → SRV_RATE_RESPONSE (01,07)
-//  5.  CLI_RATE_ACK (01,08)             → (ничего, но запоминаем)
-//  6.  CLI_LOCATE_RIGHTS (02,02)        → SRV_LOCATE_RIGHTS (02,03)
-//  7.  CLI_BUDDY_RIGHTS (03,02)         → SRV_BUDDY_RIGHTS (03,03)
-//  8.  CLI_ICBM_PARAMS (04,04)          → SRV_ICBM_PARAMS (04,05)
-//  9.  CLI_PRIVACY_RIGHTS (09,02)       → SRV_PRIVACY_RIGHTS (09,03)
-// 10.  CLI_SSI_RIGHTS (13,02)           → SRV_SSI_RIGHTS (13,03)
-// 11.  CLI_SSI_REQUEST (13,04/05)       → SRV_SSI_REPLY (13,06)
-// 12.  CLI_SSI_ACTIVATE (13,07)         → Отправить онлайн-статусы!
-// 13.  CLI_READY (01,02)                → SRV_SELF_INFO (01,0F)
-// 14.  CLI_SET_STATUS (01,0E)           → Уведомить контакты
-// 15.  CLI_SET_EXT_STATUS (01,1E)       → Уведомить контакты
-// 16.  CLI_OFFLINE_REQ (15,02/003C)     → Оффлайн-сообщения
-// 17.  CLI_OFFLINE_ACK (15,02/003E)     → (ничего)
-//
-//  Jimm ждёт ответ на КАЖДЫЙ шаг.
-//  Без ответа = зависание!
-// ═══════════════════════════════════════════
-
 const BOS = {
 
     async handlePacket(session, snac, context) {
@@ -226,13 +201,6 @@ const BOS = {
                 new OscarBuilder().u16(0x0005).build()); // Error: service unavailable
         }
     },
-
-    // ═══════════════════════════════════════
-    //  Rate Response — корректный формат
-    //
-    //  Jimm строго проверяет формат!
-    //  Неправильный формат = зависание.
-    // ═══════════════════════════════════════
 
     buildRateResponse() {
         const b = new OscarBuilder();
@@ -634,17 +602,6 @@ const BOS = {
             // Иначе отправляем полный список
             await this.sendSSIList(session, reqId);
         }
-
-        // ═══════════════════════════════════════
-        //  0x07 — CLI_SSI_ACTIVATE
-        //
-        //  Клиент активировал контакт-лист.
-        //  ПОСЛЕ ЭТОГО шага нужно отправить
-        //  онлайн-статусы всех контактов!
-        //
-        //  Jimm ЖДЁТ этого. Без этого шага
-        //  Jimm зависает на «Loading...»
-        // ═══════════════════════════════════════
         if (subtype === 0x0007) {
             console.log(`\x1b[36m[SSI ACTIVATE]\x1b[0m ${session.uin} → sending buddy statuses`);
 
@@ -737,16 +694,6 @@ const BOS = {
         console.log(`\x1b[36m[SSI]\x1b[0m Sent ${items.length} items to ${session.uin}`);
     },
 
-    // ═══════════════════════════════════════════════
-    //  ICQ Extensions 0x0015
-    //
-    //  ВАЖНО: Ответ на оффлайн-сообщения (0x003C)
-    //  должен использовать cmd_type=0x0042,
-    //  НЕ ОБЁРНУТЫЙ в 0x07DA!
-    //
-    //  Jimm ждёт именно такой формат.
-    // ═══════════════════════════════════════════════
-
     async handleICQ(session, snac, ctx) {
         if (snac.subtype !== 0x0002) return;
         const tlvs = parseTLVs(snac.data);
@@ -761,12 +708,6 @@ const BOS = {
 
         console.log(`\x1b[35m[ICQ]\x1b[0m ${session.uin} cmd=0x${cmdType.toString(16).padStart(4,'0')} seq=${seq}`);
 
-        // ═══════════════════════════════════════
-        //  0x003C — Запрос оффлайн-сообщений
-        //
-        //  Ответ: cmd_type = 0x0042 (конец оффлайн)
-        //  НЕ обёрнутый в 0x07DA!
-        // ═══════════════════════════════════════
         if (cmdType === 0x003C) {
             console.log(`\x1b[35m[ICQ]\x1b[0m ${session.uin} offline messages request`);
 
@@ -911,5 +852,6 @@ const BOS = {
         this.sendICQMetaReply(session, reqId, ownerUin, seq, replyType, Buffer.concat(bufs));
     },
 };
+
 
 module.exports = BOS;
