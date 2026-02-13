@@ -49,7 +49,7 @@ npm install
 npm start
 ```
 ## User registration
-
+```
 # Basic registration
 node database.js add 1000 password
 
@@ -64,5 +64,5 @@ node database.js search Alice
 
 # Delete user
 node database.js del 1000
-
+```
 
