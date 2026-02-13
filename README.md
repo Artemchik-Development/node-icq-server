@@ -66,3 +66,7 @@ node database.js search Alice
 node database.js del 1000
 ```
 
+<div align="center">
+
+Made with ❤️ for the ICQ community
+
