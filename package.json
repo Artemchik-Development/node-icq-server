@@ -1,0 +1,17 @@
+{
+  "name": "node-icq-server",
+  "version": "1.0.0",
+  "description": "A self-hostable ICQ server.",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [node,javascript,icq,retro],
+  "author": "Artemchik Development",
+  "license": "GNU GPL v3.0",
+  "type": "commonjs",
+  "dependencies": {
+    "iconv-lite": "^0.7.2",
+    "sqlite3": "^5.1.7"
+  }
+}
