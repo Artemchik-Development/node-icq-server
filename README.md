@@ -46,7 +46,7 @@ A self-hostable ICQ server.
 git clone https://github.com/Artemchik-Development/node-icq-server.git
 cd node-icq-server
 npm install
-npm start
+node server.js
 ```
 ## User registration
 ```
