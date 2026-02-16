@@ -1,5 +1,5 @@
 # node-icq-server
-A self-hostable ICQ server.
+A self-hostable ICQ server. Written in JavaScript.
 
 ## Features
 
