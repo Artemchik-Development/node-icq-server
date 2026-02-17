@@ -3,7 +3,7 @@ const { OscarBuilder, parseTLVs } = require('./oscar');
 const db = require('./database');
 
 // ═══════════════════════════════════════════
-//  User Info: построение из TLV-хранилища
+//  User Info
 // ═══════════════════════════════════════════
 
 function packUserInfoOnline(session) {
@@ -80,6 +80,10 @@ const STATUS_NAMES = {
     0x0004: 'NA', 0x0010: 'Occupied', 0x0020: 'Free4Chat', 0x0100: 'Invisible',
 };
 
+// ═══════════════════════════════════════════
+//  Главный обработчик
+// ═══════════════════════════════════════════
+
 const BOS = {
 
     async handlePacket(session, snac, context) {
@@ -106,14 +110,11 @@ const BOS = {
         const { subtype, reqId } = snac;
         const { sessions } = ctx;
 
-        // ── 0x02 — CLI_READY ──
+        // 0x02 — CLI_READY
         if (subtype === 0x0002) {
             console.log(`\x1b[32m[READY]\x1b[0m ${session.uin} (watching ${session.watching.size})`);
-
-            // Self info
             session.sendSNAC(0x0001, 0x000F, 0, 0, packUserInfoOnline(session));
 
-            // Оффлайн-сообщения (некоторые клиенты не шлют 0x15/0x003C)
             const offline = await db.getOffline(session.uin);
             for (const msg of offline) {
                 session.sendSNAC(0x0004, 0x0007, 0, 0,
@@ -122,28 +123,19 @@ const BOS = {
             }
         }
 
-        // ── 0x06 — CLI_RATE_REQUEST ──
+        // 0x06 — CLI_RATE_REQUEST
         if (subtype === 0x0006) {
             session.sendSNAC(0x0001, 0x0007, 0, reqId, this.buildRateResponse());
         }
 
-        // ═══════════════════════════════════════
-        //  0x08 — CLI_RATE_ACK
-        //
-        //  Jimm шлёт это после получения
-        //  rate response. Без обработки этого
-        //  шага Jimm может не продолжить.
-        //
-        //  После rate ACK отправляем MOTD.
-        // ═══════════════════════════════════════
+        // 0x08 — CLI_RATE_ACK
         if (subtype === 0x0008) {
             console.log(`\x1b[90m[RATE ACK]\x1b[0m ${session.uin}`);
-            // MOTD (некоторые клиенты ждут его после rate ack)
             session.sendSNAC(0x0001, 0x0013, 0, 0,
                 new OscarBuilder().u16(0x0004).tlv(0x000B, 'Welcome!').build());
         }
 
-        // ── 0x0E — CLI_SET_STATUS ──
+        // 0x0E — CLI_SET_STATUS
         if (subtype === 0x000E) {
             const rawTlvs = parseTLVs(snac.data);
             mergeTLVs(session, rawTlvs);
@@ -155,7 +147,7 @@ const BOS = {
             await this.notifyWatchers(session, sessions, true);
         }
 
-        // ── 0x11 — CLI_SET_IDLE ──
+        // 0x11 — CLI_SET_IDLE
         if (subtype === 0x0011) {
             if (snac.data.length >= 4) {
                 const idle = snac.data.readUInt32BE(0);
@@ -168,9 +160,8 @@ const BOS = {
             }
         }
 
-        // ── 0x17 — CLI_FAMILIES_VERSIONS ──
+        // 0x17 — CLI_FAMILIES_VERSIONS
         if (subtype === 0x0017) {
-            // Парсим версии клиента и отвечаем своими
             const b = new OscarBuilder();
             [
                 [0x0001, 0x0004], [0x0002, 0x0001], [0x0003, 0x0001],
@@ -180,12 +171,7 @@ const BOS = {
             session.sendSNAC(0x0001, 0x0018, 0, reqId, b.build());
         }
 
-        // ═══════════════════════════════════════
-        //  0x1E — CLI_SET_EXTENDED_STATUS
-        //
-        //  X-статусы, mood, аватарки.
-        //  TLV 0x001D (BART), TLV 0x000E (note)
-        // ═══════════════════════════════════════
+        // 0x1E — CLI_SET_EXTENDED_STATUS (x-statuses, mood, avatars)
         if (subtype === 0x001E) {
             const rawTlvs = parseTLVs(snac.data);
             mergeTLVs(session, rawTlvs);
@@ -193,35 +179,27 @@ const BOS = {
             await this.notifyWatchers(session, sessions, true);
         }
 
-        // ── 0x04 — CLI_REQUEST_SERVICE ──
+        // 0x04 — CLI_REQUEST_SERVICE
         if (subtype === 0x0004) {
-            // Клиент просит перенаправление на сервис
-            // Отвечаем что сервис недоступен (минимальная совместимость)
             session.sendSNAC(0x0001, 0x0001, 0, reqId,
-                new OscarBuilder().u16(0x0005).build()); // Error: service unavailable
+                new OscarBuilder().u16(0x0005).build());
         }
     },
 
+    // ═══════════════════════════════════════
+    //  Rate Response
+    // ═══════════════════════════════════════
+
     buildRateResponse() {
         const b = new OscarBuilder();
-
-        // Количество классов
         b.u16(1);
 
-        // ── Класс 1 ──
-        b.u16(0x0001);     // class ID
-        b.u32(80);         // window size
-        b.u32(2500);       // clear level
-        b.u32(2000);       // alert level
-        b.u32(1500);       // limit level
-        b.u32(1000);       // disconnect level
-        b.u32(2500);       // current level
-        b.u32(6000);       // max level
-        b.u32(0);          // last time (0 = never)
-        b.u8(0);           // current state (0 = normal)
+        // Класс 1
+        b.u16(0x0001); b.u32(80);
+        b.u32(2500); b.u32(2000); b.u32(1500); b.u32(1000);
+        b.u32(2500); b.u32(6000);
+        b.u32(0); b.u8(0);
 
-        // ── Привязки: все family/subtype → класс 1 ──
-        // Каждая пара = family(2) + subtype(2)
         const pairs = [];
         const families = {
             0x0001: [0x0001,0x0002,0x0003,0x0004,0x0005,0x0006,0x0007,0x0008,
@@ -234,15 +212,11 @@ const BOS = {
                      0x0008,0x0009,0x000A,0x000E,0x000F,0x0011,0x0012],
             0x0015: [0x0001,0x0002,0x0003],
         };
-
         for (const [fam, subs] of Object.entries(families)) {
-            for (const sub of subs) {
-                pairs.push([parseInt(fam), sub]);
-            }
+            for (const sub of subs) pairs.push([parseInt(fam), sub]);
         }
 
-        b.u16(0x0001);       // class ID
-        b.u16(pairs.length); // number of pairs
+        b.u16(0x0001); b.u16(pairs.length);
         pairs.forEach(([f, s]) => b.u16(f).u16(s));
 
         return b.build();
@@ -259,16 +233,11 @@ const BOS = {
         for (const [uin, ws] of sessions) {
             if (uin === targetUin) continue;
             if (!ws.watching.has(targetUin)) continue;
-
-            if (online) {
-                ws.sendSNAC(0x0003, 0x000B, 0, 0, packUserInfoOnline(session));
-            } else {
-                ws.sendSNAC(0x0003, 0x000C, 0, 0, packUserInfoOffline(targetUin));
-            }
+            if (online) ws.sendSNAC(0x0003, 0x000B, 0, 0, packUserInfoOnline(session));
+            else ws.sendSNAC(0x0003, 0x000C, 0, 0, packUserInfoOffline(targetUin));
             notified++;
         }
 
-        // SSI watchers
         const ssiWatchers = await db.all(
             "SELECT DISTINCT uin FROM ssi WHERE name = ? AND type = 0",
             [targetUin]
@@ -289,7 +258,6 @@ const BOS = {
         }
     },
 
-    // Отправить онлайн-статусы всех контактов
     async sendBuddyStatuses(session, sessions) {
         let sent = 0;
         for (const buddyUin of session.watching) {
@@ -299,9 +267,7 @@ const BOS = {
                 sent++;
             }
         }
-        if (sent > 0) {
-            console.log(`\x1b[36m[BUDDIES]\x1b[0m Sent ${sent} online status(es) to ${session.uin}`);
-        }
+        if (sent > 0) console.log(`\x1b[36m[BUDDIES]\x1b[0m Sent ${sent} online status(es) to ${session.uin}`);
     },
 
     // ═══════════════════════════════════════
@@ -312,15 +278,15 @@ const BOS = {
         const { subtype, reqId } = snac;
         const { sessions } = ctx;
 
+        // 0x02 — Rights
         if (subtype === 0x0002) {
             session.sendSNAC(0x0002, 0x0003, 0, reqId,
                 new OscarBuilder()
-                    .tlv(0x0001, 0x0400)
-                    .tlv(0x0002, 0x0010)
-                    .tlv(0x0005, 0x000A)
+                    .tlv(0x0001, 0x0400).tlv(0x0002, 0x0010).tlv(0x0005, 0x000A)
                     .build());
         }
 
+        // 0x04 — Set User Info
         if (subtype === 0x0004) {
             const tlvs = parseTLVs(snac.data);
             if (tlvs[0x0002]) session.profile = tlvs[0x0002].toString();
@@ -331,6 +297,7 @@ const BOS = {
             }
         }
 
+        // 0x05 — Get User Info
         if (subtype === 0x0005 && snac.data.length >= 3) {
             const flags = snac.data.readUInt16BE(0);
             const uinLen = snac.data[2];
@@ -367,6 +334,7 @@ const BOS = {
         const { subtype, reqId } = snac;
         const { sessions } = ctx;
 
+        // 0x02 — Rights
         if (subtype === 0x0002) {
             session.sendSNAC(0x0003, 0x0003, 0, reqId,
                 new OscarBuilder()
@@ -374,7 +342,8 @@ const BOS = {
                     .build());
         }
 
-        if (subtype === 0x0004) { // Add
+        // 0x04 — Add Buddy
+        if (subtype === 0x0004) {
             let pos = 0;
             const d = snac.data;
             while (pos < d.length) {
@@ -389,7 +358,8 @@ const BOS = {
             }
         }
 
-        if (subtype === 0x0005) { // Del
+        // 0x05 — Del Buddy
+        if (subtype === 0x0005) {
             let pos = 0;
             const d = snac.data;
             while (pos < d.length) {
@@ -492,7 +462,7 @@ const BOS = {
     },
 
     // ═══════════════════════════════════════
-    //  Парсеры
+    //  Парсеры текста
     // ═══════════════════════════════════════
 
     parseCh1(data) {
@@ -549,18 +519,15 @@ const BOS = {
         }
     },
 
-    // ═══════════════════════════════════════════════
+    // ═══════════════════════════════════════
     //  SSI 0x0013
-    //
-    //  КРИТИЧЕСКИ ВАЖНО для Jimm:
-    //  Обработать subtype 0x07 (SSI Activate)!
-    // ═══════════════════════════════════════════════
+    // ═══════════════════════════════════════
 
     async handleSSI(session, snac, ctx) {
         const { subtype, reqId } = snac;
         const { sessions } = ctx;
 
-        // 0x02 — Rights Request
+        // 0x02 — Rights
         if (subtype === 0x0002) {
             session.sendSNAC(0x0013, 0x0003, 0, reqId,
                 new OscarBuilder()
@@ -576,39 +543,30 @@ const BOS = {
 
         // 0x05 — Check (timestamp + count)
         if (subtype === 0x0005) {
-            // Проверяем timestamp от клиента
             if (snac.data.length >= 6) {
                 const cliTs = snac.data.readUInt32BE(0);
                 const cliCnt = snac.data.readUInt16BE(4);
                 const items = await db.getSSI(session.uin);
 
-                // Если timestamp клиента совпадает и кол-во не изменилось,
-                // отвечаем «без изменений» (0x000F)
-                // Jimm проверяет это!
                 if (cliCnt === items.length && cliTs > 0) {
                     const nb = new OscarBuilder();
                     nb.u32(Math.floor(Date.now() / 1000));
                     nb.u16(items.length);
                     session.sendSNAC(0x0013, 0x000F, 0, reqId, nb.build());
                     console.log(`\x1b[36m[SSI]\x1b[0m ${session.uin}: no changes (${items.length} items)`);
-
-                    // Загрузить watching из SSI
                     for (const item of items) {
                         if (item.type === 0 && item.name) session.watching.add(item.name);
                     }
                     return;
                 }
             }
-            // Иначе отправляем полный список
             await this.sendSSIList(session, reqId);
         }
+
+        // 0x07 — SSI Activate
         if (subtype === 0x0007) {
-            console.log(`\x1b[36m[SSI ACTIVATE]\x1b[0m ${session.uin} → sending buddy statuses`);
-
-            // Отправить онлайн-статусы
+            console.log(`\x1b[36m[SSI ACTIVATE]\x1b[0m ${session.uin}`);
             await this.sendBuddyStatuses(session, sessions);
-
-            // Уведомить контакты о нашем появлении
             await this.notifyWatchers(session, sessions, true);
         }
 
@@ -620,6 +578,7 @@ const BOS = {
                 try {
                     await db.addSSI(session.uin, item.name, item.gid, item.iid, item.type, item.tlvData);
                     results.push(0x0000);
+                    console.log(`\x1b[36m[SSI+]\x1b[0m ${session.uin}: "${item.name}" g${item.gid}:i${item.iid} t${item.type}`);
                     if (item.type === 0 && item.name) {
                         session.watching.add(item.name);
                         const bs = sessions.get(item.name);
@@ -663,7 +622,7 @@ const BOS = {
             session.sendSNAC(0x0013, 0x000E, 0, reqId, ack);
         }
 
-        // 0x11 / 0x12 — Start / End Edit Transaction
+        // 0x11 / 0x12 — Start / End Edit
         if (subtype === 0x0011 || subtype === 0x0012) {
             if (subtype === 0x0012) {
                 const buddies = await db.getSSIBuddies(session.uin);
@@ -694,6 +653,10 @@ const BOS = {
         console.log(`\x1b[36m[SSI]\x1b[0m Sent ${items.length} items to ${session.uin}`);
     },
 
+    // ═══════════════════════════════════════════════
+    //  ICQ Extensions 0x0015
+    // ═══════════════════════════════════════════════
+
     async handleICQ(session, snac, ctx) {
         if (snac.subtype !== 0x0002) return;
         const tlvs = parseTLVs(snac.data);
@@ -706,54 +669,243 @@ const BOS = {
         const seq      = extData.readUInt16LE(8);
         const subData  = extData.subarray(10);
 
-        console.log(`\x1b[35m[ICQ]\x1b[0m ${session.uin} cmd=0x${cmdType.toString(16).padStart(4,'0')} seq=${seq}`);
+        console.log(`\x1b[35m[ICQ]\x1b[0m ${session.uin} cmd=0x${cmdType.toString(16).padStart(4,'0')} seq=${seq} len=${subData.length}`);
 
+        // 0x003C — Offline messages request
         if (cmdType === 0x003C) {
-            console.log(`\x1b[35m[ICQ]\x1b[0m ${session.uin} offline messages request`);
-
-            // Сначала доставляем оффлайн-сообщения через ICBM
             const offline = await db.getOffline(session.uin);
             for (const msg of offline) {
                 session.sendSNAC(0x0004, 0x0007, 0, 0,
                     this.buildIncomingMsg(msg.sender, msg.message, msg.ts));
                 console.log(`  [OFFLINE] ${msg.sender}: ${msg.message}`);
             }
-
-            // Ответ: «больше нет оффлайн-сообщений»
             this.sendICQDirect(session, snac.reqId, ownerUin, 0x0042, seq, Buffer.alloc(0));
             return;
         }
 
-        // 0x003E — ACK оффлайн-сообщений
-        if (cmdType === 0x003E) {
-            console.log(`\x1b[35m[ICQ]\x1b[0m ${session.uin} offline messages ack`);
-            return;
-        }
+        // 0x003E — Offline messages ack
+        if (cmdType === 0x003E) return;
 
-        // 0x07D0 — Meta-info запрос
+        // 0x07D0 — Meta-info request
         if (cmdType === 0x07D0 && subData.length >= 2) {
             const subCmd = subData.readUInt16LE(0);
             const metaData = subData.subarray(2);
 
-            if (subCmd === 0x0569) { await this.searchByUIN(session, snac.reqId, ownerUin, seq, metaData); return; }
-            if (subCmd === 0x055F) { await this.searchByDetails(session, snac.reqId, ownerUin, seq, metaData); return; }
+            console.log(`\x1b[35m[META]\x1b[0m ${session.uin} subCmd=0x${subCmd.toString(16).padStart(4,'0')} metaLen=${metaData.length}`);
+
+            if (metaData.length > 0 && metaData.length <= 64) {
+                const hex = Array.from(metaData).map(b => b.toString(16).padStart(2, '0')).join(' ');
+                console.log(`\x1b[90m  metaData: ${hex}\x1b[0m`);
+            }
+
+            // Search by UIN (0x0569)
+            if (subCmd === 0x0569) {
+                await this.searchByUIN(session, snac.reqId, ownerUin, seq, metaData);
+                return;
+            }
+
+            // Search by details / White Pages (0x055F)
+            if (subCmd === 0x055F) {
+                await this.searchByDetails(session, snac.reqId, ownerUin, seq, metaData);
+                return;
+            }
+
+            // Search by email (0x0573)
+            if (subCmd === 0x0573) {
+                await this.searchByEmail(session, snac.reqId, ownerUin, seq, metaData);
+                return;
+            }
+
+            // User info request
             if (subCmd === 0x04BA || subCmd === 0x04B2 || subCmd === 0x051F) {
-                await this.sendUserInfo(session, snac.reqId, ownerUin, seq, subCmd, metaData); return;
+                await this.sendUserInfo(session, snac.reqId, ownerUin, seq, subCmd, metaData);
+                return;
             }
+
+            // Set info — ACK
             if (subCmd === 0x0C3A || subCmd === 0x0D0E) {
-                this.sendICQMetaReply(session, snac.reqId, ownerUin, seq, 0x0C3F, Buffer.from([0x0A])); return;
+                this.sendICQMetaReply(session, snac.reqId, ownerUin, seq, 0x0C3F, Buffer.from([0x0A]));
+                return;
             }
+
+            console.log(`\x1b[90m[META]\x1b[0m Unhandled subCmd=0x${subCmd.toString(16)}`);
         }
     },
 
-    // ═══════════════════════════════════════
-    //  ICQ: Прямой ответ (не meta-info)
-    //  Для оффлайн-сообщений и т.п.
+    // ═══════════════════════════════════════════════
+    //  Поиск по UIN (0x0569)
     //
-    //  Формат: TLV(0x0001):
-    //    data_len(2 LE) + owner_uin(4 LE) +
-    //    cmd_type(2 LE) + seq(2 LE) + [payload]
-    // ═══════════════════════════════════════
+    //  Формат metaData: LNTS(uin_string)
+    //  Пример UIN "1000": 05 00 31 30 30 30 00
+    // ═══════════════════════════════════════════════
+
+    async searchByUIN(session, reqId, ownerUin, seq, data) {
+        let targetUin = '';
+
+        // Метод 1: LNTS (стандартный формат)
+        if (data.length >= 3) {
+            const r = readLNTS(data, 0);
+            if (r.str && /^\d+$/.test(r.str)) {
+                targetUin = r.str;
+            }
+        }
+
+        // Метод 2: DWORD LE (старые клиенты)
+        if (!targetUin && data.length >= 4) {
+            const v = data.readUInt32LE(0);
+            if (v > 0 && v < 1000000000) {
+                const possibleLen = data.readUInt16LE(0);
+                if (possibleLen > 20 || possibleLen === 0) {
+                    targetUin = v.toString();
+                }
+            }
+        }
+
+        // Метод 3: Raw string
+        if (!targetUin && data.length >= 1) {
+            const raw = data.toString('utf8').replace(/\0/g, '').trim();
+            if (/^\d+$/.test(raw)) {
+                targetUin = raw;
+            }
+        }
+
+        console.log(`\x1b[35m[SEARCH UIN]\x1b[0m ${session.uin} → "${targetUin}"`);
+
+        if (!targetUin) {
+            this.sendSearchResult(session, reqId, ownerUin, seq, []);
+            return;
+        }
+
+        const user = await db.searchByUIN(targetUin);
+        if (user) console.log(`\x1b[32m[SEARCH]\x1b[0m Found: ${user.uin} (${user.nickname})`);
+        else console.log(`\x1b[33m[SEARCH]\x1b[0m UIN ${targetUin} not found`);
+
+        this.sendSearchResult(session, reqId, ownerUin, seq, user ? [user] : []);
+    },
+
+    // ═══════════════════════════════════════════════
+    //  Поиск по данным / White Pages (0x055F)
+    //
+    //  Формат: LNTS firstname + LNTS lastname +
+    //          LNTS nickname + LNTS email + ...
+    // ═══════════════════════════════════════════════
+
+    async searchByDetails(session, reqId, ownerUin, seq, data) {
+        let pos = 0;
+        const r1 = readLNTS(data, pos); pos = r1.next;
+        const r2 = readLNTS(data, pos); pos = r2.next;
+        const r3 = readLNTS(data, pos); pos = r3.next;
+        const r4 = readLNTS(data, pos); pos = r4.next;
+
+        const query = { firstname: r1.str, lastname: r2.str, nickname: r3.str, email: r4.str };
+        console.log(`\x1b[35m[SEARCH DETAILS]\x1b[0m ${session.uin}:`, JSON.stringify(query));
+
+        const results = await db.searchByDetails(query);
+        console.log(`\x1b[35m[SEARCH]\x1b[0m Found ${results.length} result(s)`);
+        this.sendSearchResult(session, reqId, ownerUin, seq, results);
+    },
+
+    // ═══════════════════════════════════════════════
+    //  Поиск по email (0x0573)
+    // ═══════════════════════════════════════════════
+
+    async searchByEmail(session, reqId, ownerUin, seq, data) {
+        const r = readLNTS(data, 0);
+        console.log(`\x1b[35m[SEARCH EMAIL]\x1b[0m ${session.uin}: "${r.str}"`);
+
+        const results = await db.searchByDetails({ email: r.str });
+        console.log(`\x1b[35m[SEARCH]\x1b[0m Found ${results.length} result(s)`);
+        this.sendSearchResult(session, reqId, ownerUin, seq, results);
+    },
+
+    // ═══════════════════════════════════════════════
+    //  Формирование результата поиска
+    // ═══════════════════════════════════════════════
+
+    sendSearchResult(session, reqId, ownerUin, seq, users) {
+        if (users.length === 0) {
+            this.sendICQMetaReply(session, reqId, ownerUin, seq, 0x01AE,
+                Buffer.from([0x32, 0x00, 0x00]));
+            return;
+        }
+
+        for (let i = 0; i < users.length; i++) {
+            const user = users[i];
+            const isLast = (i === users.length - 1);
+            const subType = isLast ? 0x01AE : 0x01A4;
+
+            const bufs = [];
+            bufs.push(Buffer.from([0x0A])); // success
+
+            const uinBuf = Buffer.alloc(4);
+            uinBuf.writeUInt32LE(parseInt(user.uin) || 0);
+            bufs.push(uinBuf);
+
+            bufs.push(writeLNTS(user.nickname || ''));
+            bufs.push(writeLNTS(user.firstname || ''));
+            bufs.push(writeLNTS(user.lastname || ''));
+            bufs.push(writeLNTS(user.email || ''));
+
+            bufs.push(Buffer.from([0x00])); // auth required
+            bufs.push(Buffer.alloc(2));     // online status (LE)
+            bufs.push(Buffer.from([user.gender || 0])); // gender
+
+            const ageBuf = Buffer.alloc(2);
+            ageBuf.writeUInt16LE(user.age || 0);
+            bufs.push(ageBuf);
+
+            this.sendICQMetaReply(session, reqId, ownerUin, seq, subType, Buffer.concat(bufs));
+        }
+
+        console.log(`\x1b[35m[SEARCH]\x1b[0m Sent ${users.length} result(s) to ${session.uin}`);
+    },
+
+    // ═══════════════════════════════════════════════
+    //  User info request (0x04BA, 0x04B2, 0x051F)
+    //
+    //  metaData: target_uin (DWORD LE)
+    // ═══════════════════════════════════════════════
+
+    async sendUserInfo(session, reqId, ownerUin, seq, subCmd, data) {
+        let targetUin = session.uin;
+        if (data.length >= 4) {
+            const v = data.readUInt32LE(0);
+            if (v > 0) targetUin = v.toString();
+        }
+
+        console.log(`\x1b[35m[INFO]\x1b[0m ${session.uin} → UIN ${targetUin} (0x${subCmd.toString(16)})`);
+
+        const user = await db.searchByUIN(targetUin);
+        const replyType = (subCmd === 0x04BA) ? 0x0104 : 0x00FB;
+
+        const bufs = [];
+        bufs.push(Buffer.from([0x0A]));
+
+        if (user) {
+            bufs.push(writeLNTS(user.nickname || ''));
+            bufs.push(writeLNTS(user.firstname || ''));
+            bufs.push(writeLNTS(user.lastname || ''));
+            bufs.push(writeLNTS(user.email || ''));
+            bufs.push(Buffer.from([0x00, 0x00, 0x00]));
+        } else {
+            bufs.push(writeLNTS('Unknown'));
+            bufs.push(writeLNTS(''));
+            bufs.push(writeLNTS(''));
+            bufs.push(writeLNTS(''));
+            bufs.push(Buffer.from([0x00, 0x00, 0x00]));
+        }
+
+        this.sendICQMetaReply(session, reqId, ownerUin, seq, replyType, Buffer.concat(bufs));
+    },
+
+    // ═══════════════════════════════════════════════
+    //  ICQ Direct Reply (не meta-info)
+    //  Для оффлайн (0x0042) и т.п.
+    //
+    //  TLV(0x0001):
+    //    len(2 LE) + uin(4 LE) + cmd(2 LE) + seq(2 LE) + payload
+    // ═══════════════════════════════════════════════
+
     sendICQDirect(session, snacReqId, ownerUin, cmdType, seq, payload) {
         const inner = Buffer.alloc(8);
         inner.writeUInt32LE(parseInt(ownerUin) || parseInt(session.uin) || 0, 0);
@@ -771,15 +923,15 @@ const BOS = {
             new OscarBuilder().tlv(0x0001, Buffer.concat([lenBuf, innerFull])).build());
     },
 
-    // ═══════════════════════════════════════
-    //  ICQ: Meta-info ответ (0x07DA)
-    //  Для поиска, инфо о пользователе и т.п.
+    // ═══════════════════════════════════════════════
+    //  ICQ Meta Reply (0x07DA)
+    //  Для поиска и user info
     //
-    //  Формат: TLV(0x0001):
-    //    data_len(2 LE) + owner_uin(4 LE) +
-    //    0x07DA(2 LE) + seq(2 LE) +
-    //    sub_type(2 LE) + [payload]
-    // ═══════════════════════════════════════
+    //  TLV(0x0001):
+    //    len(2 LE) + uin(4 LE) + 0x07DA(2 LE) +
+    //    seq(2 LE) + subType(2 LE) + payload
+    // ═══════════════════════════════════════════════
+
     sendICQMetaReply(session, snacReqId, ownerUin, seq, subType, payload) {
         const inner = Buffer.alloc(10);
         inner.writeUInt32LE(parseInt(ownerUin) || parseInt(session.uin) || 0, 0);
@@ -794,64 +946,6 @@ const BOS = {
         session.sendSNAC(0x0015, 0x0003, 0, snacReqId,
             new OscarBuilder().tlv(0x0001, Buffer.concat([lenBuf, innerFull])).build());
     },
-
-    // ── Поиск и инфо ──
-
-    async searchByUIN(session, reqId, ownerUin, seq, data) {
-        let targetUin = '';
-        if (data.length >= 4) { const v = data.readUInt32LE(0); if (v > 0) targetUin = v.toString(); }
-        if (!targetUin && data.length >= 2) { targetUin = readLNTS(data, 0).str; }
-        const user = await db.searchByUIN(targetUin);
-        this.sendSearchResult(session, reqId, ownerUin, seq, user ? [user] : []);
-    },
-
-    async searchByDetails(session, reqId, ownerUin, seq, data) {
-        let pos = 0;
-        const r1 = readLNTS(data, pos); pos = r1.next;
-        const r2 = readLNTS(data, pos); pos = r2.next;
-        const r3 = readLNTS(data, pos); pos = r3.next;
-        const r4 = readLNTS(data, pos);
-        const results = await db.searchByDetails({ firstname: r1.str, lastname: r2.str, nickname: r3.str, email: r4.str });
-        this.sendSearchResult(session, reqId, ownerUin, seq, results);
-    },
-
-    sendSearchResult(session, reqId, ownerUin, seq, users) {
-        if (users.length === 0) {
-            this.sendICQMetaReply(session, reqId, ownerUin, seq, 0x01AE, Buffer.from([0x32, 0x00, 0x00]));
-            return;
-        }
-        for (let i = 0; i < users.length; i++) {
-            const user = users[i];
-            const subType = (i === users.length - 1) ? 0x01AE : 0x01A4;
-            const bufs = [Buffer.from([0x0A])];
-            const uinBuf = Buffer.alloc(4); uinBuf.writeUInt32LE(parseInt(user.uin) || 0);
-            bufs.push(uinBuf);
-            bufs.push(writeLNTS(user.nickname || ''));
-            bufs.push(writeLNTS(user.firstname || ''));
-            bufs.push(writeLNTS(user.lastname || ''));
-            bufs.push(writeLNTS(user.email || ''));
-            bufs.push(Buffer.from([0x00]));
-            bufs.push(Buffer.alloc(2));
-            bufs.push(Buffer.from([user.gender || 0]));
-            const ageBuf = Buffer.alloc(2); ageBuf.writeUInt16LE(user.age || 0); bufs.push(ageBuf);
-            this.sendICQMetaReply(session, reqId, ownerUin, seq, subType, Buffer.concat(bufs));
-        }
-    },
-
-    async sendUserInfo(session, reqId, ownerUin, seq, subCmd, data) {
-        let targetUin = session.uin;
-        if (data.length >= 4) { const v = data.readUInt32LE(0); if (v > 0) targetUin = v.toString(); }
-        const user = await db.searchByUIN(targetUin);
-        const replyType = (subCmd === 0x04BA) ? 0x0104 : 0x00FB;
-        const bufs = [Buffer.from([0x0A])];
-        bufs.push(writeLNTS(user?.nickname || 'Unknown'));
-        bufs.push(writeLNTS(user?.firstname || ''));
-        bufs.push(writeLNTS(user?.lastname || ''));
-        bufs.push(writeLNTS(user?.email || ''));
-        bufs.push(Buffer.from([0x00, 0x00, 0x00]));
-        this.sendICQMetaReply(session, reqId, ownerUin, seq, replyType, Buffer.concat(bufs));
-    },
 };
-
 
 module.exports = BOS;
