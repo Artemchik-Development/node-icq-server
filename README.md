@@ -37,7 +37,7 @@ A self-hostable ICQ server. Written in JavaScript.
 | **QIP 2005** | Build 8095+ | XOR (Roasted) | ✅ Full |
 | **QIP Infium** | 9040+ | MD5 (BUCP) | ✅ Full |
 | **Pidgin** | Any | MD5 | ✅ Full |
-| **Jimm** | Any | MD5 | ✅ Full |
+| **Jimm** | Any | XOR(?) | ✅ Full |
 | **QIP 2012**| Any | MD5| ✅ Full |
 
 ### Installation
