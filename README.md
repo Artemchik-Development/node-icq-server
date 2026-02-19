@@ -39,7 +39,7 @@ A self-hostable ICQ server. Written in JavaScript.
 | **Pidgin** | Any | MD5 | ✅ Full |
 | **Jimm** | Any | XOR(?) | ✅ Full |
 | **QIP 2012**| Any | MD5| ✅ Full |
-
+| **D[i]chat**| Any | MD5(?)| ✅ Full |
 ### Installation
 
 ```bash
