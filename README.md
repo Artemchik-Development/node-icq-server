@@ -46,6 +46,9 @@ A self-hostable ICQ server. Written in JavaScript.
 | **D[i]chat**| Any | MD5(?)| ✅ Full |
 ### Installation
 
+> [!CAUTION]
+> PLEASE CONFIGURE THE SERVER IN CONFIG.JS | ПОЖАЛУЙСТА ПРОИЗВЕДИТЕ КОНФИГУРАЦИЮ СЕРВЕРА В config.js
+
 ```bash
 git clone https://github.com/Artemchik-Development/node-icq-server.git
 cd node-icq-server
