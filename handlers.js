@@ -5,6 +5,8 @@ const config = require('./config');
 
 const PENDING_COOKIES = new Map(); // cookie hex -> uin
 
+// --- Хелперы ---
+
 function md5(data) {
     return crypto.createHash('md5').update(data).digest();
 }
@@ -24,6 +26,8 @@ function packUserInfo(uin, status = 0) {
     
     return b.build();
 }
+
+// --- Обработчики ---
 
 const Auth = {
     keys: new Map(),
