@@ -159,8 +159,7 @@ async function handleFLAP(session, channel, data) {
 
             console.log(`\x1b[32m[BOS]\x1b[0m ${uin} ONLINE (${sessions.size} users, watching ${session.watching.size})`);
 
-            const fam = new OscarBuilder();
-            [0x0001, 0x0002, 0x0003, 0x0004, 0x0009, 0x0013, 0x0015].forEach(f => fam.u16(f));
+            const fam = new OscarBuilder();[0x0001, 0x0002, 0x0003, 0x0004, 0x0009, 0x0013, 0x0015].forEach(f => fam.u16(f));
             session.sendSNAC(0x0001, 0x0003, 0, 0, fam.build());
 
             session.sendSNAC(0x0001, 0x0013, 0, 0,
@@ -194,7 +193,7 @@ function createServer(type, port) {
         session.sendFLAP(0x01, Buffer.from([0x00, 0x00, 0x00, 0x01]));
 
         socket.on('data', async chunk => {
-            hexDump(chunk, `← IN  [${type}] ${session.uin || addr}`);
+            hexDump(chunk, `← IN[${type}] ${session.uin || addr}`);
             session.buffer = Buffer.concat([session.buffer, chunk]);
             while (session.buffer.length >= HEADER_SIZE) {
                 if (session.buffer[0] !== FLAP_MAGIC) { socket.destroy(); return; }
@@ -229,13 +228,57 @@ function createServer(type, port) {
 
     try {
         const { startWeb } = require('./web');
-        await startWeb();
+        
+        // 1. Create the broadcast function that constructs a SNAC(0x04, 0x07) message payload
+        function broadcastMessage(text) {
+            const sender = 'System';
+            const textBuf = Buffer.from(text, 'utf8'); 
+            
+            // ICBM Channel 1 Message Data (TLV 0x02) requires fragments to be formatted properly
+            // Fragment 1: Message capabilities/features
+            const frag1 = Buffer.from([0x05, 0x01, 0x00, 0x04, 0x01, 0x01, 0x01, 0x01]);
+            
+            // Fragment 2: The actual text string with Charset and Language headers
+            const frag2 = Buffer.alloc(8 + textBuf.length);
+            frag2.writeUInt16BE(0x0101, 0); // Fragment ID (0x0101 = text)
+            frag2.writeUInt16BE(textBuf.length + 4, 2); // Fragment Length
+            frag2.writeUInt16BE(0x0000, 4); // Charset (0 = US-ASCII / UTF-8)
+            frag2.writeUInt16BE(0x0000, 6); // Language (0 = English)
+            textBuf.copy(frag2, 8); // Write the message string
+            
+            const tlv02 = Buffer.concat([frag1, frag2]);
+            
+            // Loop through all connected sockets and send the broadcast
+            for (const[uin, session] of sessions) {
+                if (session.type === 'BOS' && session.uin) {
+                    const cookie = crypto.randomBytes(8);
+                    const b = new OscarBuilder();
+                    
+                    b.raw(cookie)
+                     .u16(1) // Channel 1 (Standard Message)
+                     .u8(sender.length).string(sender) // Sender Name ("System")
+                     .u16(0).u16(2) // Warning Level, TLV Count
+                     .tlv(0x0001, Buffer.from([0x00, 0x40])) // User Class
+                     .tlv(0x0006, Buffer.from([0,0,0,0])) // User Status
+                     .tlv(0x0002, tlv02); // The Encoded Text Payload
+
+                    session.sendSNAC(0x04, 0x07, 0, 0, b.build());
+                }
+            }
+        }
+
+        // 2. Pass the sessions map and broadcast function to web.js
+        await startWeb({
+            sessions: sessions,
+            broadcast: broadcastMessage
+        });
+        
     } catch (e) {
         console.log(`\x1b[90m[WEB]\x1b[0m Web server not loaded (${e.message})`);
     }
 
-    const regStatus = config.REGISTRATION_ENABLED ? '\x1b[32menabled\x1b[0m' : '\x1b[31mdisabled\x1b[0m';
-    console.log(`\nRegistration via OSCAR: ${regStatus}`);
+    const regStatus = config.REGISTRATION_ENABLED ? '\x1b[32menabled\x1b[0m' : '\x1b[31mdisabled\x1b';
+	console.log(`\nRegistration via OSCAR: ${regStatus}`);
     console.log(`UIN range: ${config.UIN_MIN} — ${config.UIN_MAX}`);
     console.log(`\nAll servers ready.\n`);
 })();
