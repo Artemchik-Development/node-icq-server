@@ -30,7 +30,7 @@ function packUserInfoOffline(uin) {
 // ═══════════════════════════════════════════
 
 function parseSSIItems(data) {
-    const items = [];
+    const items =[];
     let pos = 0;
     while (pos + 10 <= data.length) {
         const nameLen = data.readUInt16BE(pos); pos += 2;
@@ -119,7 +119,7 @@ const BOS = {
             for (const msg of offline) {
                 session.sendSNAC(0x0004, 0x0007, 0, 0,
                     this.buildIncomingMsg(msg.sender, msg.message, msg.ts));
-                console.log(`  [OFFLINE] ${msg.sender} → ${session.uin}: ${msg.message}`);
+                console.log(`[OFFLINE] ${msg.sender} → ${session.uin}: ${msg.message}`);
             }
         }
 
@@ -163,15 +163,12 @@ const BOS = {
         // 0x17 — CLI_FAMILIES_VERSIONS
         if (subtype === 0x0017) {
             const b = new OscarBuilder();
-            [
-                [0x0001, 0x0004], [0x0002, 0x0001], [0x0003, 0x0001],
-                [0x0004, 0x0001], [0x0009, 0x0001], [0x0013, 0x0005],
-                [0x0015, 0x0001],
+            [[0x0001, 0x0004], [0x0002, 0x0001],[0x0003, 0x0001],[0x0004, 0x0001],[0x0009, 0x0001], [0x0013, 0x0005],[0x0015, 0x0001],
             ].forEach(([f, v]) => b.u16(f).u16(v));
             session.sendSNAC(0x0001, 0x0018, 0, reqId, b.build());
         }
 
-        // 0x1E — CLI_SET_EXTENDED_STATUS (x-statuses, mood, avatars)
+        // 0x1E — CLI_SET_EXTENDED_STATUS
         if (subtype === 0x001E) {
             const rawTlvs = parseTLVs(snac.data);
             mergeTLVs(session, rawTlvs);
@@ -193,8 +190,6 @@ const BOS = {
     buildRateResponse() {
         const b = new OscarBuilder();
         b.u16(1);
-
-        // Класс 1
         b.u16(0x0001); b.u32(80);
         b.u32(2500); b.u32(2000); b.u32(1500); b.u32(1000);
         b.u32(2500); b.u32(6000);
@@ -202,15 +197,15 @@ const BOS = {
 
         const pairs = [];
         const families = {
-            0x0001: [0x0001,0x0002,0x0003,0x0004,0x0005,0x0006,0x0007,0x0008,
+            0x0001:[0x0001,0x0002,0x0003,0x0004,0x0005,0x0006,0x0007,0x0008,
                      0x000E,0x000F,0x0011,0x0013,0x0017,0x0018,0x001E],
-            0x0002: [0x0001,0x0002,0x0003,0x0004,0x0005,0x0006],
-            0x0003: [0x0001,0x0002,0x0003,0x0004,0x0005,0x000B,0x000C],
-            0x0004: [0x0001,0x0002,0x0004,0x0005,0x0006,0x0007,0x000C],
-            0x0009: [0x0001,0x0002,0x0003],
-            0x0013: [0x0001,0x0002,0x0003,0x0004,0x0005,0x0006,0x0007,
+            0x0002:[0x0001,0x0002,0x0003,0x0004,0x0005,0x0006],
+            0x0003:[0x0001,0x0002,0x0003,0x0004,0x0005,0x000B,0x000C],
+            0x0004:[0x0001,0x0002,0x0004,0x0005,0x0006,0x0007,0x000C],
+            0x0009:[0x0001,0x0002,0x0003],
+            0x0013:[0x0001,0x0002,0x0003,0x0004,0x0005,0x0006,0x0007,
                      0x0008,0x0009,0x000A,0x000E,0x000F,0x0011,0x0012],
-            0x0015: [0x0001,0x0002,0x0003],
+            0x0015:[0x0001,0x0002,0x0003],
         };
         for (const [fam, subs] of Object.entries(families)) {
             for (const sub of subs) pairs.push([parseInt(fam), sub]);
@@ -218,7 +213,6 @@ const BOS = {
 
         b.u16(0x0001); b.u16(pairs.length);
         pairs.forEach(([f, s]) => b.u16(f).u16(s));
-
         return b.build();
     },
 
@@ -239,8 +233,7 @@ const BOS = {
         }
 
         const ssiWatchers = await db.all(
-            "SELECT DISTINCT uin FROM ssi WHERE name = ? AND type = 0",
-            [targetUin]
+            "SELECT DISTINCT uin FROM ssi WHERE name = ? AND type = 0",[targetUin]
         );
         for (const row of ssiWatchers) {
             const ws = sessions.get(row.uin);
@@ -278,15 +271,11 @@ const BOS = {
         const { subtype, reqId } = snac;
         const { sessions } = ctx;
 
-        // 0x02 — Rights
         if (subtype === 0x0002) {
             session.sendSNAC(0x0002, 0x0003, 0, reqId,
-                new OscarBuilder()
-                    .tlv(0x0001, 0x0400).tlv(0x0002, 0x0010).tlv(0x0005, 0x000A)
-                    .build());
+                new OscarBuilder().tlv(0x0001, 0x0400).tlv(0x0002, 0x0010).tlv(0x0005, 0x000A).build());
         }
 
-        // 0x04 — Set User Info
         if (subtype === 0x0004) {
             const tlvs = parseTLVs(snac.data);
             if (tlvs[0x0002]) session.profile = tlvs[0x0002].toString();
@@ -297,7 +286,6 @@ const BOS = {
             }
         }
 
-        // 0x05 — Get User Info
         if (subtype === 0x0005 && snac.data.length >= 3) {
             const flags = snac.data.readUInt16BE(0);
             const uinLen = snac.data[2];
@@ -321,7 +309,6 @@ const BOS = {
                 b.tlv(0x0001, Buffer.from([0x00, 0x40]));
                 b.tlv(0x0002, `UIN: ${targetUin}`);
             }
-
             session.sendSNAC(0x0002, 0x0006, 0, reqId, b.build());
         }
     },
@@ -334,34 +321,25 @@ const BOS = {
         const { subtype, reqId } = snac;
         const { sessions } = ctx;
 
-        // 0x02 — Rights
         if (subtype === 0x0002) {
             session.sendSNAC(0x0003, 0x0003, 0, reqId,
-                new OscarBuilder()
-                    .tlv(0x0001, 1000).tlv(0x0002, 200).tlv(0x0003, 200)
-                    .build());
+                new OscarBuilder().tlv(0x0001, 1000).tlv(0x0002, 200).tlv(0x0003, 200).build());
         }
 
-        // 0x04 — Add Buddy
         if (subtype === 0x0004) {
-            let pos = 0;
-            const d = snac.data;
+            let pos = 0; const d = snac.data;
             while (pos < d.length) {
                 const bl = d[pos]; pos += 1;
                 if (pos + bl > d.length) break;
                 const buddyUin = d.subarray(pos, pos + bl).toString('utf8'); pos += bl;
                 session.watching.add(buddyUin);
                 const bs = sessions.get(buddyUin);
-                if (bs) {
-                    session.sendSNAC(0x0003, 0x000B, 0, 0, packUserInfoOnline(bs));
-                }
+                if (bs) session.sendSNAC(0x0003, 0x000B, 0, 0, packUserInfoOnline(bs));
             }
         }
 
-        // 0x05 — Del Buddy
         if (subtype === 0x0005) {
-            let pos = 0;
-            const d = snac.data;
+            let pos = 0; const d = snac.data;
             while (pos < d.length) {
                 const bl = d[pos]; pos += 1;
                 if (pos + bl > d.length) break;
@@ -377,8 +355,9 @@ const BOS = {
 
     async handleICBM(session, snac, ctx) {
         const { subtype, reqId } = snac;
-        if (subtype === 0x0004) { session.sendSNAC(0x0004, 0x0005, 0, reqId, buildICBMParams()); return; }
-        if (subtype === 0x0002) { session.sendSNAC(0x0004, 0x0005, 0, reqId, buildICBMParams()); return; }
+        if (subtype === 0x0004 || subtype === 0x0002) { 
+            session.sendSNAC(0x0004, 0x0005, 0, reqId, buildICBMParams()); return; 
+        }
         if (subtype === 0x0006) { await this.handleSendMsg(session, snac, ctx); return; }
     },
 
@@ -394,21 +373,32 @@ const BOS = {
         const tlvData = d.subarray(11 + uinLen);
         const tlvs = parseTLVs(tlvData);
 
+        const target = sessions.get(recipient);
+
+        // QIP Typing Notification (Канал 2) - бесшумный проброс, не парсим как текст
+        if (channel === 2) {
+            if (target) {
+                const b = new OscarBuilder();
+                b.raw(cookie).u16(channel).u8(session.uin.length).string(session.uin)
+                 .u16(0).u16(2).tlv(0x01, Buffer.from([0x00, 0x40])).tlv(0x06, Buffer.from([0,0,0,0]));
+                if (tlvs[0x02]) b.tlv(0x02, tlvs[0x02]);
+                target.sendSNAC(0x04, 0x07, 0, 0, b.build());
+            }
+            return; 
+        }
+
         let msgText = '';
         if (channel === 1 && tlvs[0x0002]) msgText = this.parseCh1(tlvs[0x0002]);
-        else if (channel === 2 && tlvs[0x0005]) msgText = this.parseCh2(tlvs[0x0005]);
         else if (channel === 4 && tlvs[0x0005]) msgText = this.parseCh4(tlvs[0x0005]);
         else msgText = `(ch${channel})`;
 
-        console.log(`\x1b[32m[MSG]\x1b[0m ${session.uin} → ${recipient} [ch${channel}]: ${msgText}`);
+        console.log(`\x1b[32m[MSG]\x1b[0m ${session.uin} → ${recipient} : ${msgText}`);
 
-        const target = sessions.get(recipient);
         if (target) {
             this.forwardMessage(session, target, cookie, channel, tlvs);
             if (tlvs[0x0003]) {
                 session.sendSNAC(0x0004, 0x000C, 0, snac.reqId,
-                    new OscarBuilder().raw(cookie).u16(channel)
-                        .u8(recipient.length).string(recipient).build());
+                    new OscarBuilder().raw(cookie).u16(channel).u8(recipient.length).string(recipient).build());
             }
         } else {
             if (msgText) {
@@ -424,8 +414,8 @@ const BOS = {
         b.raw(cookie).u16(channel).u8(senderBuf.length).raw(senderBuf);
         b.u16(0);
 
-        const infoTlvs = [];
-        for (const t of [0x0001, 0x0003, 0x0006, 0x000C, 0x000D]) {
+        const infoTlvs =[];
+        for (const t of[0x0001, 0x0003, 0x0006, 0x000C, 0x000D]) {
             if (sender.userTLVs.has(t)) infoTlvs.push([t, sender.userTLVs.get(t)]);
         }
         b.u16(infoTlvs.length);
@@ -461,10 +451,6 @@ const BOS = {
         return b.build();
     },
 
-    // ═══════════════════════════════════════
-    //  Парсеры текста
-    // ═══════════════════════════════════════
-
     parseCh1(data) {
         try {
             let pos = 0;
@@ -485,17 +471,6 @@ const BOS = {
             }
         } catch (e) {}
         return '(parse error)';
-    },
-
-    parseCh2(data) {
-        try {
-            const idx = data.indexOf(Buffer.from([0x00, 0x00, 0x00]));
-            if (idx > 20) {
-                const parts = data.subarray(idx).toString('utf8').split('\0');
-                for (const p of parts) { if (p.trim().length > 0) return p.trim(); }
-            }
-        } catch (e) {}
-        return '(ch2)';
     },
 
     parseCh4(data) {
@@ -527,21 +502,15 @@ const BOS = {
         const { subtype, reqId } = snac;
         const { sessions } = ctx;
 
-        // 0x02 — Rights
         if (subtype === 0x0002) {
             session.sendSNAC(0x0013, 0x0003, 0, reqId,
-                new OscarBuilder()
-                    .tlv(0x0004, 1000).tlv(0x0005, 100)
-                    .tlv(0x0006, 200).tlv(0x0007, 200).tlv(0x0008, 200)
-                    .build());
+                new OscarBuilder().tlv(0x0004, 1000).tlv(0x0005, 100).tlv(0x0006, 200).tlv(0x0007, 200).tlv(0x0008, 200).build());
         }
 
-        // 0x04 — Request Full List
         if (subtype === 0x0004) {
             await this.sendSSIList(session, reqId);
         }
 
-        // 0x05 — Check (timestamp + count)
         if (subtype === 0x0005) {
             if (snac.data.length >= 6) {
                 const cliTs = snac.data.readUInt32BE(0);
@@ -549,11 +518,8 @@ const BOS = {
                 const items = await db.getSSI(session.uin);
 
                 if (cliCnt === items.length && cliTs > 0) {
-                    const nb = new OscarBuilder();
-                    nb.u32(Math.floor(Date.now() / 1000));
-                    nb.u16(items.length);
+                    const nb = new OscarBuilder().u32(Math.floor(Date.now() / 1000)).u16(items.length);
                     session.sendSNAC(0x0013, 0x000F, 0, reqId, nb.build());
-                    console.log(`\x1b[36m[SSI]\x1b[0m ${session.uin}: no changes (${items.length} items)`);
                     for (const item of items) {
                         if (item.type === 0 && item.name) session.watching.add(item.name);
                     }
@@ -563,14 +529,12 @@ const BOS = {
             await this.sendSSIList(session, reqId);
         }
 
-        // 0x07 — SSI Activate
         if (subtype === 0x0007) {
             console.log(`\x1b[36m[SSI ACTIVATE]\x1b[0m ${session.uin}`);
             await this.sendBuddyStatuses(session, sessions);
             await this.notifyWatchers(session, sessions, true);
         }
 
-        // 0x08 — Add Items
         if (subtype === 0x0008) {
             const items = parseSSIItems(snac.data);
             const results = [];
@@ -578,7 +542,6 @@ const BOS = {
                 try {
                     await db.addSSI(session.uin, item.name, item.gid, item.iid, item.type, item.tlvData);
                     results.push(0x0000);
-                    console.log(`\x1b[36m[SSI+]\x1b[0m ${session.uin}: "${item.name}" g${item.gid}:i${item.iid} t${item.type}`);
                     if (item.type === 0 && item.name) {
                         session.watching.add(item.name);
                         const bs = sessions.get(item.name);
@@ -591,10 +554,9 @@ const BOS = {
             session.sendSNAC(0x0013, 0x000E, 0, reqId, ack);
         }
 
-        // 0x09 — Update Items
         if (subtype === 0x0009) {
             const items = parseSSIItems(snac.data);
-            const results = [];
+            const results =[];
             for (const item of items) {
                 try {
                     await db.addSSI(session.uin, item.name, item.gid, item.iid, item.type, item.tlvData);
@@ -606,10 +568,9 @@ const BOS = {
             session.sendSNAC(0x0013, 0x000E, 0, reqId, ack);
         }
 
-        // 0x0A — Delete Items
         if (subtype === 0x000A) {
             const items = parseSSIItems(snac.data);
-            const results = [];
+            const results =[];
             for (const item of items) {
                 try {
                     await db.deleteSSI(session.uin, item.gid, item.iid);
@@ -622,7 +583,6 @@ const BOS = {
             session.sendSNAC(0x0013, 0x000E, 0, reqId, ack);
         }
 
-        // 0x11 / 0x12 — Start / End Edit
         if (subtype === 0x0011 || subtype === 0x0012) {
             if (subtype === 0x0012) {
                 const buddies = await db.getSSIBuddies(session.uin);
@@ -648,13 +608,11 @@ const BOS = {
             if (tlv.length > 0) b.raw(tlv);
         }
         b.u32(Math.floor(Date.now() / 1000));
-
         session.sendSNAC(0x0013, 0x0006, 0, reqId, b.build());
-        console.log(`\x1b[36m[SSI]\x1b[0m Sent ${items.length} items to ${session.uin}`);
     },
 
     // ═══════════════════════════════════════════════
-    //  ICQ Extensions 0x0015
+    //  ICQ Extensions 0x0015 (QIP SEARCH / INFO)
     // ═══════════════════════════════════════════════
 
     async handleICQ(session, snac, ctx) {
@@ -669,104 +627,116 @@ const BOS = {
         const seq      = extData.readUInt16LE(8);
         const subData  = extData.subarray(10);
 
-        console.log(`\x1b[35m[ICQ]\x1b[0m ${session.uin} cmd=0x${cmdType.toString(16).padStart(4,'0')} seq=${seq} len=${subData.length}`);
-
-        // 0x003C — Offline messages request
         if (cmdType === 0x003C) {
             const offline = await db.getOffline(session.uin);
             for (const msg of offline) {
-                session.sendSNAC(0x0004, 0x0007, 0, 0,
-                    this.buildIncomingMsg(msg.sender, msg.message, msg.ts));
-                console.log(`  [OFFLINE] ${msg.sender}: ${msg.message}`);
+                session.sendSNAC(0x0004, 0x0007, 0, 0, this.buildIncomingMsg(msg.sender, msg.message, msg.ts));
             }
             this.sendICQDirect(session, snac.reqId, ownerUin, 0x0042, seq, Buffer.alloc(0));
             return;
         }
 
-        // 0x003E — Offline messages ack
         if (cmdType === 0x003E) return;
 
-        // 0x07D0 — Meta-info request
         if (cmdType === 0x07D0 && subData.length >= 2) {
             const subCmd = subData.readUInt16LE(0);
             const metaData = subData.subarray(2);
 
-            console.log(`\x1b[35m[META]\x1b[0m ${session.uin} subCmd=0x${subCmd.toString(16).padStart(4,'0')} metaLen=${metaData.length}`);
-
-            if (metaData.length > 0 && metaData.length <= 64) {
-                const hex = Array.from(metaData).map(b => b.toString(16).padStart(2, '0')).join(' ');
-                console.log(`\x1b[90m  metaData: ${hex}\x1b[0m`);
-            }
-
-            // Search by UIN (0x0569)
+            // ИСПРАВЛЕНО: 0x0569 (QIP 2005 Поиск по UIN - Little Endian)
             if (subCmd === 0x0569) {
                 await this.searchByUIN(session, snac.reqId, ownerUin, seq, metaData);
                 return;
             }
 
-            // Search by details / White Pages (0x055F)
+            // ИСПРАВЛЕНО: 0x055F (QIP 2005 Поиск по деталям - LTLV)
             if (subCmd === 0x055F) {
                 await this.searchByDetails(session, snac.reqId, ownerUin, seq, metaData);
                 return;
             }
 
-            // Search by email (0x0573)
+            // ИСПРАВЛЕНО: 0x0FA0 (QIP Infium Advanced Web Search)
+            if (subCmd === 0x0FA0) {
+                await this.searchByInfium(session, snac.reqId, ownerUin, seq, metaData);
+                return;
+            }
+
             if (subCmd === 0x0573) {
                 await this.searchByEmail(session, snac.reqId, ownerUin, seq, metaData);
                 return;
             }
 
-            // User info request
             if (subCmd === 0x04BA || subCmd === 0x04B2 || subCmd === 0x051F) {
                 await this.sendUserInfo(session, snac.reqId, ownerUin, seq, subCmd, metaData);
                 return;
             }
 
-            // Set info — ACK
             if (subCmd === 0x0C3A || subCmd === 0x0D0E) {
                 this.sendICQMetaReply(session, snac.reqId, ownerUin, seq, 0x0C3F, Buffer.from([0x0A]));
                 return;
             }
-
-            console.log(`\x1b[90m[META]\x1b[0m Unhandled subCmd=0x${subCmd.toString(16)}`);
         }
     },
 
     // ═══════════════════════════════════════════════
-    //  Поиск по UIN (0x0569)
-    //
-    //  Формат metaData: LNTS(uin_string)
-    //  Пример UIN "1000": 05 00 31 30 30 30 00
+    //  Блоки поиска QIP
     // ═══════════════════════════════════════════════
+
+    async searchByInfium(session, reqId, ownerUin, seq, data) {
+        let searchStr = "";
+        
+        // QIP Infium прячет текст в Big-Endian LTLV с типом 0x0032 (50) внутри пакета 0x0FA0
+        for (let i = 0; i < data.length - 4; i++) {
+            if (data.readUInt16BE(i) === 0x0032) { 
+                const len = data.readUInt16BE(i + 2);
+                if (i + 4 + len <= data.length) {
+                    searchStr = data.subarray(i + 4, i + 4 + len).toString('utf8').replace(/\0/g, '').trim();
+                    break;
+                }
+            }
+        }
+        
+        // Фолбэк-экстрактор на всякий случай
+        if (!searchStr) {
+            const clean = data.toString('utf8').replace(/[^\x20-\x7E\u0400-\u04FF]/g, ' ').trim();
+            const parts = clean.split(/\s+/);
+            searchStr = parts[parts.length - 1] || '';
+        }
+
+        console.log(`\x1b[35m[INFIUM SEARCH]\x1b[0m ${session.uin} ищет: "${searchStr}"`);
+
+        let results = [];
+        if (searchStr) {
+            if (/^\d+$/.test(searchStr)) {
+                const u = await db.searchByUIN(searchStr);
+                if (u) results.push(u);
+            } else if (searchStr.includes('@')) {
+                results = await db.searchByDetails({ email: searchStr });
+            } else {
+                results = await db.searchByDetails({ nickname: searchStr });
+            }
+        }
+        
+        // Магия: QIP Infium отлично "кушает" стандартный ответ (0x01A4/0x01AE), 
+        // который автоматом прерывает бесконечный цикл загрузки!
+        this.sendSearchResult(session, reqId, ownerUin, seq, results);
+    },
 
     async searchByUIN(session, reqId, ownerUin, seq, data) {
         let targetUin = '';
 
-        // Метод 1: LNTS (стандартный формат)
-        if (data.length >= 3) {
-            const r = readLNTS(data, 0);
-            if (r.str && /^\d+$/.test(r.str)) {
-                targetUin = r.str;
-            }
+        // Метод 0: QIP 2005 (LTLV с типом 0x0136 / 310)
+        if (data.length >= 8 && data.readUInt16LE(0) === 0x0136) {
+            targetUin = data.readUInt32LE(4).toString();
         }
-
+        // Метод 1: LNTS (стандартный формат)
+        else if (data.length >= 3) {
+            const r = readLNTS(data, 0);
+            if (r.str && /^\d+$/.test(r.str)) targetUin = r.str;
+        }
         // Метод 2: DWORD LE (старые клиенты)
         if (!targetUin && data.length >= 4) {
             const v = data.readUInt32LE(0);
-            if (v > 0 && v < 1000000000) {
-                const possibleLen = data.readUInt16LE(0);
-                if (possibleLen > 20 || possibleLen === 0) {
-                    targetUin = v.toString();
-                }
-            }
-        }
-
-        // Метод 3: Raw string
-        if (!targetUin && data.length >= 1) {
-            const raw = data.toString('utf8').replace(/\0/g, '').trim();
-            if (/^\d+$/.test(raw)) {
-                targetUin = raw;
-            }
+            if (v > 0 && v < 1000000000) targetUin = v.toString();
         }
 
         console.log(`\x1b[35m[SEARCH UIN]\x1b[0m ${session.uin} → "${targetUin}"`);
@@ -777,44 +747,41 @@ const BOS = {
         }
 
         const user = await db.searchByUIN(targetUin);
-        if (user) console.log(`\x1b[32m[SEARCH]\x1b[0m Found: ${user.uin} (${user.nickname})`);
-        else console.log(`\x1b[33m[SEARCH]\x1b[0m UIN ${targetUin} not found`);
-
-        this.sendSearchResult(session, reqId, ownerUin, seq, user ? [user] : []);
+        this.sendSearchResult(session, reqId, ownerUin, seq, user ? [user] :[]);
     },
 
-    // ═══════════════════════════════════════════════
-    //  Поиск по данным / White Pages (0x055F)
-    //
-    //  Формат: LNTS firstname + LNTS lastname +
-    //          LNTS nickname + LNTS email + ...
-    // ═══════════════════════════════════════════════
-
     async searchByDetails(session, reqId, ownerUin, seq, data) {
-        let pos = 0;
-        const r1 = readLNTS(data, pos); pos = r1.next;
-        const r2 = readLNTS(data, pos); pos = r2.next;
-        const r3 = readLNTS(data, pos); pos = r3.next;
-        const r4 = readLNTS(data, pos); pos = r4.next;
+        let query = {};
+        
+        // Метод 0: QIP 2005 (LTLV формат)
+        if (data.length > 4 && data.readUInt16LE(0) > 0x00FF) {
+            let pos = 0;
+            while(pos + 4 <= data.length) {
+                const tType = data.readUInt16LE(pos);
+                const tLen = data.readUInt16LE(pos+2);
+                pos += 4;
+                if (tType === 340 && pos + tLen <= data.length && tLen > 2) {
+                    query.nickname = data.subarray(pos+2, pos+tLen).toString('utf8').replace(/\0/g, '').trim();
+                }
+                pos += tLen;
+            }
+        } else {
+            let pos = 0;
+            const r1 = readLNTS(data, pos); pos = r1.next;
+            const r2 = readLNTS(data, pos); pos = r2.next;
+            const r3 = readLNTS(data, pos); pos = r3.next;
+            const r4 = readLNTS(data, pos); pos = r4.next;
+            query = { firstname: r1.str, lastname: r2.str, nickname: r3.str, email: r4.str };
+        }
 
-        const query = { firstname: r1.str, lastname: r2.str, nickname: r3.str, email: r4.str };
         console.log(`\x1b[35m[SEARCH DETAILS]\x1b[0m ${session.uin}:`, JSON.stringify(query));
-
         const results = await db.searchByDetails(query);
-        console.log(`\x1b[35m[SEARCH]\x1b[0m Found ${results.length} result(s)`);
         this.sendSearchResult(session, reqId, ownerUin, seq, results);
     },
 
-    // ═══════════════════════════════════════════════
-    //  Поиск по email (0x0573)
-    // ═══════════════════════════════════════════════
-
     async searchByEmail(session, reqId, ownerUin, seq, data) {
         const r = readLNTS(data, 0);
-        console.log(`\x1b[35m[SEARCH EMAIL]\x1b[0m ${session.uin}: "${r.str}"`);
-
         const results = await db.searchByDetails({ email: r.str });
-        console.log(`\x1b[35m[SEARCH]\x1b[0m Found ${results.length} result(s)`);
         this.sendSearchResult(session, reqId, ownerUin, seq, results);
     },
 
@@ -824,8 +791,8 @@ const BOS = {
 
     sendSearchResult(session, reqId, ownerUin, seq, users) {
         if (users.length === 0) {
-            this.sendICQMetaReply(session, reqId, ownerUin, seq, 0x01AE,
-                Buffer.from([0x32, 0x00, 0x00]));
+            // МАРКЕР КОНЦА СПИСКА! Без него QIP зависает.
+            this.sendICQMetaReply(session, reqId, ownerUin, seq, 0x01AE, Buffer.from([0x32, 0x00, 0x00]));
             return;
         }
 
@@ -835,7 +802,7 @@ const BOS = {
             const subType = isLast ? 0x01AE : 0x01A4;
 
             const bufs = [];
-            bufs.push(Buffer.from([0x0A])); // success
+            bufs.push(Buffer.from([0x0A])); 
 
             const uinBuf = Buffer.alloc(4);
             uinBuf.writeUInt32LE(parseInt(user.uin) || 0);
@@ -846,9 +813,9 @@ const BOS = {
             bufs.push(writeLNTS(user.lastname || ''));
             bufs.push(writeLNTS(user.email || ''));
 
-            bufs.push(Buffer.from([0x00])); // auth required
-            bufs.push(Buffer.alloc(2));     // online status (LE)
-            bufs.push(Buffer.from([user.gender || 0])); // gender
+            bufs.push(Buffer.from([0x00])); 
+            bufs.push(Buffer.alloc(2));     
+            bufs.push(Buffer.from([user.gender || 0])); 
 
             const ageBuf = Buffer.alloc(2);
             ageBuf.writeUInt16LE(user.age || 0);
@@ -856,14 +823,10 @@ const BOS = {
 
             this.sendICQMetaReply(session, reqId, ownerUin, seq, subType, Buffer.concat(bufs));
         }
-
-        console.log(`\x1b[35m[SEARCH]\x1b[0m Sent ${users.length} result(s) to ${session.uin}`);
     },
 
     // ═══════════════════════════════════════════════
-    //  User info request (0x04BA, 0x04B2, 0x051F)
-    //
-    //  metaData: target_uin (DWORD LE)
+    //  User info request
     // ═══════════════════════════════════════════════
 
     async sendUserInfo(session, reqId, ownerUin, seq, subCmd, data) {
@@ -872,8 +835,6 @@ const BOS = {
             const v = data.readUInt32LE(0);
             if (v > 0) targetUin = v.toString();
         }
-
-        console.log(`\x1b[35m[INFO]\x1b[0m ${session.uin} → UIN ${targetUin} (0x${subCmd.toString(16)})`);
 
         const user = await db.searchByUIN(targetUin);
         const replyType = (subCmd === 0x04BA) ? 0x0104 : 0x00FB;
@@ -898,39 +859,18 @@ const BOS = {
         this.sendICQMetaReply(session, reqId, ownerUin, seq, replyType, Buffer.concat(bufs));
     },
 
-    // ═══════════════════════════════════════════════
-    //  ICQ Direct Reply (не meta-info)
-    //  Для оффлайн (0x0042) и т.п.
-    //
-    //  TLV(0x0001):
-    //    len(2 LE) + uin(4 LE) + cmd(2 LE) + seq(2 LE) + payload
-    // ═══════════════════════════════════════════════
-
     sendICQDirect(session, snacReqId, ownerUin, cmdType, seq, payload) {
         const inner = Buffer.alloc(8);
         inner.writeUInt32LE(parseInt(ownerUin) || parseInt(session.uin) || 0, 0);
         inner.writeUInt16LE(cmdType, 4);
         inner.writeUInt16LE(seq, 6);
 
-        const innerFull = payload.length > 0
-            ? Buffer.concat([inner, payload])
-            : inner;
-
+        const innerFull = payload.length > 0 ? Buffer.concat([inner, payload]) : inner;
         const lenBuf = Buffer.alloc(2);
         lenBuf.writeUInt16LE(innerFull.length);
 
-        session.sendSNAC(0x0015, 0x0003, 0, snacReqId,
-            new OscarBuilder().tlv(0x0001, Buffer.concat([lenBuf, innerFull])).build());
+        session.sendSNAC(0x0015, 0x0003, 0, snacReqId, new OscarBuilder().tlv(0x0001, Buffer.concat([lenBuf, innerFull])).build());
     },
-
-    // ═══════════════════════════════════════════════
-    //  ICQ Meta Reply (0x07DA)
-    //  Для поиска и user info
-    //
-    //  TLV(0x0001):
-    //    len(2 LE) + uin(4 LE) + 0x07DA(2 LE) +
-    //    seq(2 LE) + subType(2 LE) + payload
-    // ═══════════════════════════════════════════════
 
     sendICQMetaReply(session, snacReqId, ownerUin, seq, subType, payload) {
         const inner = Buffer.alloc(10);
@@ -943,8 +883,7 @@ const BOS = {
         const lenBuf = Buffer.alloc(2);
         lenBuf.writeUInt16LE(innerFull.length);
 
-        session.sendSNAC(0x0015, 0x0003, 0, snacReqId,
-            new OscarBuilder().tlv(0x0001, Buffer.concat([lenBuf, innerFull])).build());
+        session.sendSNAC(0x0015, 0x0003, 0, snacReqId, new OscarBuilder().tlv(0x0001, Buffer.concat([lenBuf, innerFull])).build());
     },
 };
 
