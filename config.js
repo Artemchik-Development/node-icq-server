@@ -4,7 +4,7 @@ module.exports = {
     BOS_PORT: 5191,
     BOS_ADDRESS: '0.0.0.0',
     DB_PATH: './icq.db',
-    DEBUG_PACKETS: true,
+    DEBUG_PACKETS: process.env.DEBUG_PACKETS === 'true',
 
     REGISTRATION_ENABLED: true,
     UIN_MIN: 100000,
