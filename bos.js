@@ -13,7 +13,7 @@ function packUserInfoOnline(session) {
     b.u16(0);
     const tlvMap = session.userTLVs;
     b.u16(tlvMap.size);
-    for (const [type, value] of tlvMap) b.tlv(type, value);
+    for (const[type, value] of tlvMap) b.tlv(type, value);
     return b.build();
 }
 
@@ -40,6 +40,7 @@ function parseSSIItems(data) {
     return items;
 }
 
+// Формат строк QIP Advanced (Length-Prefixed Null-Terminated)
 function writeLNTS(str) {
     const data = Buffer.from((str || '') + '\0', 'utf8');
     const len = Buffer.alloc(2);
@@ -113,7 +114,7 @@ const BOS = {
         }
         if (subtype === 0x0017) {
             const b = new OscarBuilder();
-            [[0x0001, 0x0004],[0x0002, 0x0001], [0x0003, 0x0001],[0x0004, 0x0001], [0x0009, 0x0001],[0x0013, 0x0005],[0x0015, 0x0001]]
+            [[0x0001, 0x0004],[0x0002, 0x0001], [0x0003, 0x0001],[0x0004, 0x0001],[0x0009, 0x0001],[0x0013, 0x0005],[0x0015, 0x0001]]
                 .forEach(([f, v]) => b.u16(f).u16(v));
             session.sendSNAC(0x0001, 0x0018, 0, reqId, b.build());
         }
@@ -127,7 +128,7 @@ const BOS = {
     buildRateResponse() {
         const b = new OscarBuilder();
         b.u16(1).u16(0x0001).u32(80).u32(2500).u32(2000).u32(1500).u32(1000).u32(2500).u32(6000).u32(0).u8(0);
-        const pairs = [];
+        const pairs =[];
         const families = {
             0x0001:[0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x0E,0x0F,0x11,0x13,0x17,0x18,0x1E],
             0x0002:[0x01,0x02,0x03,0x04,0x05,0x06], 0x0003:[0x01,0x02,0x03,0x04,0x05,0x0B,0x0C],
@@ -236,7 +237,7 @@ const BOS = {
             const tlvs = parseTLVs(d.subarray(11 + uinLen));
             const target = ctx.sessions.get(recipient);
 
-            // Бесшумный проброс QIP-уведомлений о печати
+            // Бесшумный проброс QIP-индикаторов о наборе текста (Канал 2)
             if (channel === 2) {
                 if (target) {
                     const b = new OscarBuilder().raw(cookie).u16(channel).u8(session.uin.length).string(session.uin).u16(0).u16(2).tlv(0x01, Buffer.from([0x00, 0x40])).tlv(0x06, Buffer.from([0,0,0,0]));
@@ -354,13 +355,12 @@ const BOS = {
             let sqlQuery = "", sqlParam = "";
 
             if (subCmd === 0x0569 && metaData.length >= 8) { 
-                // Поиск по UIN (Little-Endian)
+                // Поиск по UIN
                 sqlParam = metaData.readUInt32LE(4).toString();
                 sqlQuery = "SELECT * FROM users WHERE uin = ?";
             } 
             else if (subCmd === 0x055F || subCmd === 0x0FA0) { 
-                // QIP White Pages & Infium Search. 
-                // Вытаскиваем искомую строку напрямую.
+                // QIP White Pages & Infium Search
                 const clean = metaData.toString('utf8').replace(/[^\x20-\x7E\u0400-\u04FF]/g, ' ').trim();
                 const parts = clean.split(/\s+/);
                 sqlParam = parts[parts.length - 1] || '';
@@ -376,16 +376,16 @@ const BOS = {
                 let targetUin = session.uin;
                 if (metaData.length >= 4) { const v = metaData.readUInt32LE(0); if (v > 0) targetUin = v.toString(); }
                 const user = await db.searchByUIN(targetUin);
-                const bufs = [Buffer.from([0x0A])];
+                const bufs =[Buffer.from([0x0A])];
                 if (user) { bufs.push(writeLNTS(user.nickname)); bufs.push(writeLNTS(user.firstname)); bufs.push(writeLNTS(user.lastname)); bufs.push(writeLNTS(user.email)); bufs.push(Buffer.from([0,0,0])); }
                 else { bufs.push(writeLNTS('Unknown')); bufs.push(writeLNTS('')); bufs.push(writeLNTS('')); bufs.push(writeLNTS('')); bufs.push(Buffer.from([0,0,0])); }
                 this.sendICQMetaReply(session, snac.reqId, ownerUin, seq, subCmd === 0x04BA ? 0x0104 : 0x00FB, Buffer.concat(bufs));
                 return;
             }
             else {
-                // ИГНОРИРУЕМ неизвестные мета-команды. Не отсылаем заглушки! 
-                // Это предотвращает аварийный дисконнект Infium при логине.
-                console.log(`\x1b[90m[META]\x1b[0m Unhandled subCmd=0x${subCmd.toString(16)}`);
+                // ОБЯЗАТЕЛЬНЫЙ ОТВЕТ (ACK) НА СЛУЖЕБНЫЕ ПАКЕТЫ QIP
+                // Если не отправить ACK, QIP Infium оборвет соединение (вылетит в оффлайн).
+                this.sendICQMetaReply(session, snac.reqId, ownerUin, seq, subCmd + 1, Buffer.from([0x0A]));
                 return; 
             }
 
@@ -409,7 +409,7 @@ const BOS = {
     },
 
     sendSearchResult(session, reqId, ownerUin, seq, users) {
-        // Если ничего не найдено - шлем пустой пакет 0x01AE (Конец списка)
+        // МАРКЕР КОНЦА СПИСКА! Без него QIP Infium зависает на этапе "Поиск...".
         if (!users || users.length === 0) {
             this.sendICQMetaReply(session, reqId, ownerUin, seq, 0x01AE, Buffer.alloc(0));
             return;
@@ -421,10 +421,10 @@ const BOS = {
             const isLast = (i === users.length - 1);
             const subType = isLast ? 0x01AE : 0x01A4;
 
-            const bufs = [];
-            // ВАЖНО: Удален байт [0x0A] отсюда! Теперь UIN находится ровно на нулевом смещении. 
-            // Это чинит баг с выдачей UIN 458753 и срезом первых двух букв ника.
+            const bufs =[];
             
+            // ВАЖНО: Удален смещающий байт [0x01] или [0x0A] отсюда! 
+            // Пакет результата должен начинаться строго с UIN. Это чинит баг с выдачей UIN 458753.
             const uinBuf = Buffer.alloc(4);
             uinBuf.writeUInt32LE(parseInt(user.uin) || 0);
             bufs.push(uinBuf);
