@@ -56,6 +56,8 @@ npm install
 node server.js
 ```
 ## User registration
+> [!TIP]
+> Use the built-in web frontend to register users easily. 
 ```
 # Basic registration
 node database.js add 1000 password
