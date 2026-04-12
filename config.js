@@ -14,5 +14,5 @@ module.exports = {
     //  Admin Panel Config
     // ═══════════════════════════════════════
     ADMIN_USER: 'admin',
-    ADMIN_PASS: 'secretpass', // Change this!
+    ADMIN_PASS: process.env.ADMIN_PASS || 'CHANGE_ME',
 };
