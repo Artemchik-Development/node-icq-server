@@ -25,9 +25,9 @@ A self-hostable ICQ server. Written in JavaScript.
 - **X-Statuses** — Angry, Depression, At Home, At Work, etc.
 - **Extended Statuses** — Mood, status notes via BART (TLV 0x001D)
 - **Capabilities** — Full TLV passthrough for client compatibility
+- **Search by UIN** (QIP 2005 only for now)
 
 ## Needs to be implemented/fixed
-- Search by UIN
 - Full user info support
 
 
