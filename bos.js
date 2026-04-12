@@ -13,7 +13,7 @@ function packUserInfoOnline(session) {
     b.u16(0);
     const tlvMap = session.userTLVs;
     b.u16(tlvMap.size);
-    for (const[type, value] of tlvMap) b.tlv(type, value);
+    for (const [type, value] of tlvMap) b.tlv(type, value);
     return b.build();
 }
 
@@ -127,7 +127,7 @@ const BOS = {
     buildRateResponse() {
         const b = new OscarBuilder();
         b.u16(1).u16(0x0001).u32(80).u32(2500).u32(2000).u32(1500).u32(1000).u32(2500).u32(6000).u32(0).u8(0);
-        const pairs = [];
+        const pairs =[];
         const families = {
             0x0001:[0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x0E,0x0F,0x11,0x13,0x17,0x18,0x1E],
             0x0002:[0x01,0x02,0x03,0x04,0x05,0x06], 0x0003:[0x01,0x02,0x03,0x04,0x05,0x0B,0x0C],
@@ -302,7 +302,26 @@ const BOS = {
             const items = await db.getSSI(session.uin);
             for (const i of items) if (i.type === 0 && i.name) session.watching.add(i.name);
             const b = new OscarBuilder().u8(0).u16(items.length);
-            for (const i of items) { const nb = Buffer.from(i.name || '', 'utf8'); b.u16(nb.length).raw(nb).u16(i.gid).u16(i.iid).u16(i.type).u16(i.tlv ? i.tlv.length : 0); if(i.tlv) b.raw(i.tlv); }
+            for (const i of items) { const nb = Buffer.from(i.name || '', 'utf8'); b.u16(nb.length).raw(nb).u16(i.gid).u16(i.iid).u16(i.type).u16(i.tlvData ? i.tlvData.length : 0); if(i.tlvData) b.raw(i.tlvData); }
+            b.u32(Math.floor(Date.now() / 1000));
+            session.sendSNAC(0x0013, 0x0006, 0, snac.reqId, b.build());
+        }
+        // ВОССТАНОВЛЕНО: Без этого Infium зависает на логине
+        if (snac.subtype === 0x0005) {
+            const items = await db.getSSI(session.uin);
+            if (snac.data.length >= 6) {
+                const cliTs = snac.data.readUInt32BE(0);
+                const cliCnt = snac.data.readUInt16BE(4);
+                if (cliCnt === items.length && cliTs > 0) {
+                    const nb = new OscarBuilder().u32(Math.floor(Date.now() / 1000)).u16(items.length);
+                    session.sendSNAC(0x0013, 0x000F, 0, snac.reqId, nb.build());
+                    for (const i of items) { if (i.type === 0 && i.name) session.watching.add(i.name); }
+                    return;
+                }
+            }
+            for (const i of items) if (i.type === 0 && i.name) session.watching.add(i.name);
+            const b = new OscarBuilder().u8(0).u16(items.length);
+            for (const i of items) { const nb = Buffer.from(i.name || '', 'utf8'); b.u16(nb.length).raw(nb).u16(i.gid).u16(i.iid).u16(i.type).u16(i.tlvData ? i.tlvData.length : 0); if(i.tlvData) b.raw(i.tlvData); }
             b.u32(Math.floor(Date.now() / 1000));
             session.sendSNAC(0x0013, 0x0006, 0, snac.reqId, b.build());
         }
@@ -313,7 +332,7 @@ const BOS = {
             for (const item of items) {
                 try {
                     if (snac.subtype === 0x0008) { await db.run("DELETE FROM ssi WHERE uin = ? AND name = ?",[session.uin, item.name]); await db.run("INSERT INTO ssi (uin, name, gid, iid, type) VALUES (?, ?, ?, ?, ?)",[session.uin, item.name, item.gid, item.iid, item.type]); if (item.type === 0 && item.name) { session.watching.add(item.name); const bs = ctx.sessions.get(item.name); if (bs) session.sendSNAC(0x0003, 0x000B, 0, 0, packUserInfoOnline(bs)); } }
-                    if (snac.subtype === 0x0009) await db.run("UPDATE ssi SET gid = ?, type = ? WHERE uin = ? AND name = ? AND iid = ?", [item.gid, item.type, session.uin, item.name, item.iid]);
+                    if (snac.subtype === 0x0009) await db.run("UPDATE ssi SET gid = ?, type = ? WHERE uin = ? AND name = ? AND iid = ?",[item.gid, item.type, session.uin, item.name, item.iid]);
                     if (snac.subtype === 0x000A) { await db.run("DELETE FROM ssi WHERE uin = ? AND name = ? AND iid = ?",[session.uin, item.name, item.iid]); if (item.type === 0 && item.name) session.watching.delete(item.name); }
                     results.push(0x0000);
                 } catch (e) { results.push(0x000A); }
@@ -356,31 +375,25 @@ const BOS = {
             let sqlQuery = "", sqlParam = "";
 
             if (subCmd === 0x0569 && metaData.length >= 8) { 
-                // Поиск по UIN (QIP 2005)
                 sqlParam = metaData.readUInt32LE(4).toString();
                 sqlQuery = "SELECT * FROM users WHERE uin = ?";
             } 
-            else if (subCmd === 0x055F) { 
-                // Поиск по деталям (White Pages)
-                let pos = 0;
-                while(pos + 4 <= metaData.length) {
-                    const tType = metaData.readUInt16LE(pos);
-                    const tLen = metaData.readUInt16LE(pos+2);
-                    pos += 4;
-                    if (tType === 340 && pos + tLen <= metaData.length && tLen > 2) {
-                        sqlParam = metaData.subarray(pos+2, pos+tLen).toString('utf8').replace(/\0/g, '').trim();
-                        if (sqlParam.includes('@')) sqlQuery = "SELECT * FROM users WHERE email = ?";
-                        else sqlQuery = "SELECT * FROM users WHERE nickname = ? OR uin = ?";
-                    }
-                    pos += tLen;
+            else if (subCmd === 0x055F || subCmd === 0x0FA0) { 
+                const clean = metaData.toString('utf8').replace(/[^\x20-\x7E\u0400-\u04FF]/g, ' ').trim();
+                const parts = clean.split(/\s+/);
+                sqlParam = parts[parts.length - 1] || '';
+                
+                if (sqlParam) {
+                    if (/^\d+$/.test(sqlParam)) sqlQuery = "SELECT * FROM users WHERE uin = ?";
+                    else if (sqlParam.includes('@')) sqlQuery = "SELECT * FROM users WHERE email = ?";
+                    else sqlQuery = "SELECT * FROM users WHERE nickname = ?";
                 }
             } 
             else if (subCmd === 0x04BA || subCmd === 0x04B2 || subCmd === 0x051F) {
-                // Запрос профиля пользователя (Infium часто юзает его для поиска по UIN)
                 let targetUin = session.uin;
                 if (metaData.length >= 4) { const v = metaData.readUInt32LE(0); if (v > 0) targetUin = v.toString(); }
                 const user = await db.searchByUIN(targetUin);
-                const bufs = [Buffer.from([0x0A])];
+                const bufs =[Buffer.from([0x0A])];
                 if (user) { bufs.push(writeLNTS(user.nickname)); bufs.push(writeLNTS(user.firstname)); bufs.push(writeLNTS(user.lastname)); bufs.push(writeLNTS(user.email)); bufs.push(Buffer.from([0,0,0])); }
                 else { bufs.push(writeLNTS('Unknown')); bufs.push(writeLNTS('')); bufs.push(writeLNTS('')); bufs.push(writeLNTS('')); bufs.push(Buffer.from([0,0,0])); }
                 this.sendICQMetaReply(session, snac.reqId, ownerUin, seq, subCmd === 0x04BA ? 0x0104 : 0x00FB, Buffer.concat(bufs));
@@ -391,13 +404,11 @@ const BOS = {
                 return;
             }
             else {
-                // ИГНОРИРУЕМ команды вроде 0x0FA0 (XML плагины от Infium). 
-                // Если мы на них ответим - Infium крашнется на логине.
+                // ИГНОРИРУЕМ неизвестные команды Infium, чтобы не было крашей при логине
                 console.log(`\x1b[90m[META]\x1b[0m Unhandled subCmd=0x${subCmd.toString(16).padStart(4,'0')}`);
                 return; 
             }
 
-            // Выполнение поиска для 0x0569, 0x055F
             if (sqlQuery && sqlParam) {
                 console.log(`\x1b[35m[QIP SEARCH]\x1b[0m ${session.uin} ищет: "${sqlParam}"`);
                 let results = [];
@@ -409,19 +420,23 @@ const BOS = {
                         if(u) results.push(u);
                     }
                 } catch(e) {}
-                this.sendQipSearchResult(session, snac.reqId, ownerUin, seq, results);
+                this.sendSearchResult(session, snac.reqId, ownerUin, seq, results);
             } else {
-                this.sendQipSearchResult(session, snac.reqId, ownerUin, seq,[]);
+                this.sendSearchResult(session, snac.reqId, ownerUin, seq,[]);
             }
         }
     },
 
-    sendQipSearchResult(session, reqId, ownerUin, seq, users) {
+    sendSearchResult(session, reqId, ownerUin, seq, users) {
+        if (!users || users.length === 0) {
+            this.sendICQMetaReply(session, reqId, ownerUin, seq, 0x01AE, Buffer.from([0x00, 0x00])); // Пустой список
+            return;
+        }
+
         const bufs = [];
         bufs.push(Buffer.from([0x0A])); // 0x0A = Success
         
-        // ВАЖНОЕ ИСПРАВЛЕНИЕ: Добавлен счетчик (2 байта). Именно из-за его отсутствия 
-        // QIP 2005 "съедал" первые байты UIN'а, получая 458753 и обрезая ник!
+        // ВАЖНОЕ ИСПРАВЛЕНИЕ: Счетчик результатов (2 байта). Спасает от обрезки ника и UIN 458753
         const countBuf = Buffer.alloc(2);
         countBuf.writeUInt16LE(users.length);
         bufs.push(countBuf);
@@ -442,7 +457,7 @@ const BOS = {
             bufs.push(Buffer.alloc(2));     // Age
         }
 
-        // Шлем всё одним пакетом 0x01AE (Конец Списка). Infium моментально уберет загрузку.
+        // 0x01AE (Конец Списка) - Infium моментально уберет загрузку поиска.
         this.sendICQMetaReply(session, reqId, ownerUin, seq, 0x01AE, Buffer.concat(bufs));
     },
 
