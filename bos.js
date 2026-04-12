@@ -2,10 +2,6 @@ const iconv = require('iconv-lite');
 const { OscarBuilder, parseTLVs } = require('./oscar');
 const db = require('./database');
 
-// ═══════════════════════════════════════════
-//  User Info & Helpers
-// ═══════════════════════════════════════════
-
 function packUserInfoOnline(session) {
     const uinBuf = Buffer.from(session.uin, 'utf8');
     const b = new OscarBuilder();
@@ -13,7 +9,7 @@ function packUserInfoOnline(session) {
     b.u16(0);
     const tlvMap = session.userTLVs;
     b.u16(tlvMap.size);
-    for (const[type, value] of tlvMap) b.tlv(type, value);
+    for (const [type, value] of tlvMap) b.tlv(type, value);
     return b.build();
 }
 
@@ -40,20 +36,11 @@ function parseSSIItems(data) {
     return items;
 }
 
-// Формат строк QIP Advanced (Length-Prefixed Null-Terminated)
 function writeLNTS(str) {
     const data = Buffer.from((str || '') + '\0', 'utf8');
     const len = Buffer.alloc(2);
     len.writeUInt16LE(data.length);
     return Buffer.concat([len, data]);
-}
-
-function readLNTS(buf, offset) {
-    if (offset + 2 > buf.length) return { str: '', next: offset };
-    const len = buf.readUInt16LE(offset);
-    if (len <= 1) return { str: '', next: offset + 2 + len };
-    const str = buf.subarray(offset + 2, offset + 2 + len - 1).toString('utf8');
-    return { str, next: offset + 2 + len };
 }
 
 function buildICBMParams() {
@@ -63,10 +50,6 @@ function buildICBMParams() {
 function mergeTLVs(session, rawTlvs) {
     for (const key of Object.keys(rawTlvs)) session.userTLVs.set(Number(key), rawTlvs[Number(key)]);
 }
-
-// ═══════════════════════════════════════════
-//  Главный обработчик BOS
-// ═══════════════════════════════════════════
 
 const BOS = {
     async handlePacket(session, snac, context) {
@@ -89,9 +72,8 @@ const BOS = {
         const { sessions } = ctx;
 
         if (subtype === 0x0002) {
-            console.log(`\x1b[32m[READY]\x1b[0m ${session.uin} (watching ${session.watching.size})`);
+            console.log(`\x1b[32m[READY]\x1b[0m ${session.uin}`);
             session.sendSNAC(0x0001, 0x000F, 0, 0, packUserInfoOnline(session));
-
             const offline = await db.getOffline(session.uin);
             for (const msg of offline) {
                 session.sendSNAC(0x0004, 0x0007, 0, 0, this.buildIncomingMsg(msg.sender, msg.message, msg.ts));
@@ -114,7 +96,7 @@ const BOS = {
         }
         if (subtype === 0x0017) {
             const b = new OscarBuilder();
-            [[0x0001, 0x0004],[0x0002, 0x0001], [0x0003, 0x0001],[0x0004, 0x0001],[0x0009, 0x0001],[0x0013, 0x0005],[0x0015, 0x0001]]
+            [[0x0001, 0x0004],[0x0002, 0x0001],[0x0003, 0x0001],[0x0004, 0x0001], [0x0009, 0x0001],[0x0013, 0x0005],[0x0015, 0x0001]]
                 .forEach(([f, v]) => b.u16(f).u16(v));
             session.sendSNAC(0x0001, 0x0018, 0, reqId, b.build());
         }
@@ -237,7 +219,7 @@ const BOS = {
             const tlvs = parseTLVs(d.subarray(11 + uinLen));
             const target = ctx.sessions.get(recipient);
 
-            // Бесшумный проброс QIP-индикаторов о наборе текста (Канал 2)
+            // Проброс системных уведомлений (QIP X-Status, Печать) без парсинга
             if (channel === 2) {
                 if (target) {
                     const b = new OscarBuilder().raw(cookie).u16(channel).u8(session.uin.length).string(session.uin).u16(0).u16(2).tlv(0x01, Buffer.from([0x00, 0x40])).tlv(0x06, Buffer.from([0,0,0,0]));
@@ -353,40 +335,67 @@ const BOS = {
             const metaData = subData.subarray(2);
 
             let sqlQuery = "", sqlParam = "";
+            let isInfiumSearch = false;
 
             if (subCmd === 0x0569 && metaData.length >= 8) { 
-                // Поиск по UIN
                 sqlParam = metaData.readUInt32LE(4).toString();
                 sqlQuery = "SELECT * FROM users WHERE uin = ?";
             } 
-            else if (subCmd === 0x055F || subCmd === 0x0FA0) { 
-                // QIP White Pages & Infium Search
-                const clean = metaData.toString('utf8').replace(/[^\x20-\x7E\u0400-\u04FF]/g, ' ').trim();
-                const parts = clean.split(/\s+/);
-                sqlParam = parts[parts.length - 1] || '';
-                
+            else if (subCmd === 0x055F) { 
+                let pos = 0;
+                while(pos + 4 <= metaData.length) {
+                    const tType = metaData.readUInt16LE(pos);
+                    const tLen = metaData.readUInt16LE(pos+2);
+                    pos += 4;
+                    if (tType === 340 && pos + tLen <= metaData.length && tLen > 2) {
+                        sqlParam = metaData.subarray(pos+2, pos+tLen).toString('utf8').replace(/\0/g, '').trim();
+                        if (sqlParam.includes('@')) sqlQuery = "SELECT * FROM users WHERE email = ?";
+                        else sqlQuery = "SELECT * FROM users WHERE nickname = ? OR uin = ?";
+                    }
+                    pos += tLen;
+                }
+            } 
+            else if (subCmd === 0x0FA0) { 
+                isInfiumSearch = true;
+                for (let i = 0; i < metaData.length - 4; i++) {
+                    if (metaData.readUInt16BE(i) === 0x0032) {
+                        const len = metaData.readUInt16BE(i + 2);
+                        if (i + 4 + len <= metaData.length) {
+                            sqlParam = metaData.subarray(i + 4, i + 4 + len).toString('utf8').replace(/\0/g, '').trim();
+                            break;
+                        }
+                    }
+                }
+                if (!sqlParam) {
+                    const clean = metaData.toString('utf8').replace(/[^\x20-\x7E\u0400-\u04FF]/g, ' ').trim();
+                    const parts = clean.split(/\s+/);
+                    sqlParam = parts[parts.length - 1] || '';
+                }
                 if (sqlParam) {
                     if (/^\d+$/.test(sqlParam)) sqlQuery = "SELECT * FROM users WHERE uin = ?";
                     else if (sqlParam.includes('@')) sqlQuery = "SELECT * FROM users WHERE email = ?";
                     else sqlQuery = "SELECT * FROM users WHERE nickname = ?";
                 }
-            } 
+            }
             else if (subCmd === 0x04BA || subCmd === 0x04B2 || subCmd === 0x051F) {
-                // Запрос профиля пользователя
                 let targetUin = session.uin;
                 if (metaData.length >= 4) { const v = metaData.readUInt32LE(0); if (v > 0) targetUin = v.toString(); }
                 const user = await db.searchByUIN(targetUin);
-                const bufs =[Buffer.from([0x0A])];
+                const bufs = [Buffer.from([0x0A])];
                 if (user) { bufs.push(writeLNTS(user.nickname)); bufs.push(writeLNTS(user.firstname)); bufs.push(writeLNTS(user.lastname)); bufs.push(writeLNTS(user.email)); bufs.push(Buffer.from([0,0,0])); }
                 else { bufs.push(writeLNTS('Unknown')); bufs.push(writeLNTS('')); bufs.push(writeLNTS('')); bufs.push(writeLNTS('')); bufs.push(Buffer.from([0,0,0])); }
                 this.sendICQMetaReply(session, snac.reqId, ownerUin, seq, subCmd === 0x04BA ? 0x0104 : 0x00FB, Buffer.concat(bufs));
                 return;
             }
+            else if (subCmd === 0x0C3A || subCmd === 0x0D0E) {
+                this.sendICQMetaReply(session, snac.reqId, ownerUin, seq, 0x0C3F, Buffer.from([0x0A]));
+                return;
+            }
             else {
-                // ОБЯЗАТЕЛЬНЫЙ ОТВЕТ (ACK) НА СЛУЖЕБНЫЕ ПАКЕТЫ QIP
-                // Если не отправить ACK, QIP Infium оборвет соединение (вылетит в оффлайн).
-                this.sendICQMetaReply(session, snac.reqId, ownerUin, seq, subCmd + 1, Buffer.from([0x0A]));
-                return; 
+                // ИСПРАВЛЕНИЕ: Возвращаем спасительную "заглушку"!
+                // Без этого ответа QIP Infium зависнет в статусе "Подключение".
+                this.sendICQMetaReply(session, snac.reqId, ownerUin, seq, subCmd + 1, Buffer.alloc(0));
+                return;
             }
 
             // Выполнение поиска
@@ -396,47 +405,42 @@ const BOS = {
                 try {
                     if(sqlQuery.includes("email = ?")) results = await db.searchByDetails({ email: sqlParam });
                     else if(sqlQuery.includes("nickname = ?")) results = await db.searchByDetails({ nickname: sqlParam });
-                    else {
-                        const u = await db.searchByUIN(sqlParam);
-                        if(u) results.push(u);
-                    }
+                    else { const u = await db.searchByUIN(sqlParam); if(u) results.push(u); }
                 } catch(e) {}
                 this.sendSearchResult(session, snac.reqId, ownerUin, seq, results);
+                if (isInfiumSearch) this.sendICQMetaReply(session, snac.reqId, ownerUin, seq, subCmd + 1, Buffer.alloc(0));
             } else {
                 this.sendSearchResult(session, snac.reqId, ownerUin, seq,[]);
+                if (isInfiumSearch) this.sendICQMetaReply(session, snac.reqId, ownerUin, seq, subCmd + 1, Buffer.alloc(0));
             }
         }
     },
 
     sendSearchResult(session, reqId, ownerUin, seq, users) {
-        // МАРКЕР КОНЦА СПИСКА! Без него QIP Infium зависает на этапе "Поиск...".
         if (!users || users.length === 0) {
             this.sendICQMetaReply(session, reqId, ownerUin, seq, 0x01AE, Buffer.alloc(0));
             return;
         }
 
-        // Если найдено, шлем результаты
         for (let i = 0; i < users.length; i++) {
             const user = users[i];
             const isLast = (i === users.length - 1);
             const subType = isLast ? 0x01AE : 0x01A4;
 
             const bufs =[];
-            
-            // ВАЖНО: Удален смещающий байт [0x01] или [0x0A] отсюда! 
-            // Пакет результата должен начинаться строго с UIN. Это чинит баг с выдачей UIN 458753.
+            // ИСПРАВЛЕНИЕ: Убран байт 0x0A. За счет этого UIN не будет обрезаться до 458753
             const uinBuf = Buffer.alloc(4);
             uinBuf.writeUInt32LE(parseInt(user.uin) || 0);
             bufs.push(uinBuf);
 
-            bufs.push(writeLNTS(user.nickname || ''));
-            bufs.push(writeLNTS(user.firstname || ''));
-            bufs.push(writeLNTS(user.lastname || ''));
-            bufs.push(writeLNTS(user.email || ''));
+            bufs.push(writeLNTS(user.nickname));
+            bufs.push(writeLNTS(user.firstname));
+            bufs.push(writeLNTS(user.lastname));
+            bufs.push(writeLNTS(user.email));
 
-            bufs.push(Buffer.from([0x00])); // Auth
-            bufs.push(Buffer.alloc(2));     // Status
-            bufs.push(Buffer.from([user.gender || 0])); // Gender
+            bufs.push(Buffer.from([0x00])); 
+            bufs.push(Buffer.alloc(2));     
+            bufs.push(Buffer.from([user.gender || 0])); 
             
             const ageBuf = Buffer.alloc(2);
             ageBuf.writeUInt16LE(user.age || 0);
