@@ -72,30 +72,7 @@ const Auth = {
     // ── BUCP SNAC обработка ──
     async handlePacket(session, snac) {
 
-        // ═══════════════════════════════════════
-        //  SNAC(0x17, 0x04) — CLI_REGISTRATION_REQUEST
-        //
-        //  Клиент хочет зарегистрировать новый UIN.
-        //
-        //  Формат запроса (TLV):
-        //    0x0001 — Desired screen name (может быть пустым)
-        //    0x0002 — Password (XOR roasted)
-        //    0x0003 — Client ID string
-        //    0x0017 — Client major version
-        //    0x0018 — Client minor version
-        //    ...
-        //
-        //  Ответ (SNAC 0x17, 0x05):
-        //    Успех: TLV 0x0001 (новый UIN) + TLV 0x0006 (cookie)
-        //    Ошибка: TLV 0x0008 (error code) + TLV 0x0004 (error URL)
-        //
-        //  Поддерживаемые клиенты:
-        //    ICQ 2000, 2001, 2002, 2003
-        //    ICQ Lite
-        //    Некоторые версии QIP
-        //    Miranda (ICQ plugin, "Register new account")
-        //    Pidgin ("Register new account")
-        // ═══════════════════════════════════════
+        
         if (snac.subtype === 0x0004) {
             await this.handleRegistration(session, snac);
             return;
