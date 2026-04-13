@@ -1,8 +1,8 @@
 module.exports = {
-    HOST: '0.0.0.0',
+    HOST: 'CHANGEME',
     AUTH_PORT: 5190,
     BOS_PORT: 5191,
-    BOS_ADDRESS: '0.0.0.0',
+    BOS_ADDRESS: 'CHANGEME',
     DB_PATH: './icq.db',
     DEBUG_PACKETS: true,
 
