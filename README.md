@@ -44,6 +44,7 @@ A self-hostable ICQ server. Written in JavaScript.
 | **Jimm** | Any | XOR(?) | ✅ Full |
 | **QIP 2012**| Any | MD5| ✅ Full |
 | **D[i]chat**| Any | MD5(?)| ✅ Full |
+| **QIP PDA** | Any | XOR (?) | ✅ Full |
 ### Installation
 
 > [!CAUTION]
