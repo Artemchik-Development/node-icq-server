@@ -48,7 +48,7 @@ A self-hostable ICQ server. Written in JavaScript.
 ### Installation
 
 > [!CAUTION]
-> PLEASE CONFIGURE THE SERVER IN CONFIG.JS | ПОЖАЛУЙСТА ПРОИЗВЕДИТЕ КОНФИГУРАЦИЮ СЕРВЕРА В config.js
+> PLEASE CONFIGURE THE SERVER IN CONFIG.JS
 
 ```bash
 git clone https://github.com/Artemchik-Development/node-icq-server.git
