@@ -4,14 +4,13 @@ const crypto = require('crypto');
 const db = require('./database');
 const config = require('./config');
 
-// Импортируем PENDING_COOKIES, чтобы передавать выданные HTTP-куки нашему BOS-серверу.
-// Убедитесь, что PENDING_COOKIES экспортируется из файла handlers.js (или bos.js).
-const { PENDING_COOKIES } = require('./handlers'); 
+// Подключаем официальный файл авторизации для передачи Cookie
+const Auth = require('./auth'); 
 
 const WEB_PORT = 8080;
 let serverRef = null;
 
-// Хранилища для HTTP API
+// Хранилища для ICQ HTTP API
 const HTTP_CHALLENGES = new Map(); 
 const HTTP_TOKENS = new Map();     
 
@@ -86,7 +85,9 @@ function checkAuth(req, res) {
     if (!auth) return false;
     const tmp = auth.split(' ');
     const buf = Buffer.from(tmp[1], 'base64');
-    const [credsUser, credsPass] = buf.toString().split(':');
+    const creds = buf.toString().split(':');
+    const credsUser = creds[0];
+    const credsPass = creds[1];
     return credsUser === config.ADMIN_USER && credsPass === config.ADMIN_PASS;
 }
 
@@ -105,7 +106,9 @@ function parseBody(req) {
             } else {
                 const params = {};
                 body.split('&').forEach(p => {
-                    const[k, v] = p.split('=');
+                    const kv = p.split('=');
+                    const k = kv[0];
+                    const v = kv[1];
                     if (k) params[k] = decodeURIComponent((v || '').replace(/\+/g, ' '));
                 });
                 resolve(params);
@@ -124,7 +127,7 @@ async function startWeb(mainServer) {
 
     const server = http.createServer(async (req, res) => {
         const u = url.parse(req.url, true);
-        const path = u.pathname.replace(/\/$/, ""); 
+        const path = (u.pathname || '').replace(/\/$/, ""); 
 
         // CORS Headers (позволяет делать запросы с вашего сайта)
         res.setHeader('Access-Control-Allow-Origin', '*');
@@ -137,7 +140,7 @@ async function startWeb(mainServer) {
         }
 
         // ══════════════════════════════════════════════════════════
-        //  1. ПУБЛИЧНАЯ РЕГИСТРАЦИЯ (Вызов с вашего лендинга)
+        //  1. ПУБЛИЧНАЯ РЕГИСТРАЦИЯ (Вызов с лендинга)
         // ══════════════════════════════════════════════════════════
         if (path === '/api/register' && req.method === 'POST') {
             const data = await parseBody(req);
@@ -218,7 +221,10 @@ async function startWeb(mainServer) {
                 const cookieBuf = crypto.randomBytes(32);
                 const cookieHex = cookieBuf.toString('hex');
                 
-                if (PENDING_COOKIES) PENDING_COOKIES.set(cookieHex, uin);
+                // Передаем Cookie в память бинарного сервера через оригинальный Auth
+                if (Auth && Auth.pendingCookies) {
+                    Auth.pendingCookies.set(cookieHex, uin);
+                }
 
                 const bosHost = `${config.BOS_ADDRESS || '2.26.61.185'}:${config.BOS_PORT || 5191}`;
                 const xml = `<response xmlns="https://api.oscar.aol.com"><statuscode>200</statuscode><statustext>OK</statustext><data><host>${bosHost}</host><cookie>${cookieBuf.toString('base64')}</cookie></data></response>`;
@@ -268,8 +274,8 @@ async function startWeb(mainServer) {
 
     server.listen(WEB_PORT, () => {
         console.log(`\x1b[1mWEB\x1b[0m server running on \x1b[36mhttp://localhost:${WEB_PORT}\x1b[0m`);
-        console.log(`      Registration:  http://localhost:${WEB_PORT}/`);
-        console.log(`      Admin Panel:   http://localhost:${WEB_PORT}/admin`);
+        console.log(`      Registration:  http://{config.HOST}:${WEB_PORT}/`);
+        console.log(`      Admin Panel:   http://{config.HOST}:${WEB_PORT}/admin`);
     });
 }
 
