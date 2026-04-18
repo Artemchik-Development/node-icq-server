@@ -270,10 +270,8 @@ async function startWeb(mainServer) {
             console.log(`\x1b[1mWEB\x1b[0m HTTPS API запущен на порту 443`);
         });
     } catch (e) {
-        console.log(`\x1b[33m[WEB]\x1b
-        [0m server running on \x1b[36mhttp://localhost:${WEB_PORT}\x1b[0m`);
-        console.log(`      Registration:  http://{config.HOST}:${WEB_PORT}/`);
-        console.log(`      Admin Panel:   http://{config.HOST}:${WEB_PORT}/admin`);
+        console.log(`Registration:  http://{config.HOST}:${WEB_PORT}/`);
+        console.log(`Admin Panel:   http://{config.HOST}:${WEB_PORT}/admin`);
     });
 }
 
