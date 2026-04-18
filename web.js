@@ -1,4 +1,6 @@
 const http = require('http');
+const https = require('https');
+const fs = require('fs');
 const url = require('url');
 const crypto = require('crypto');
 const db = require('./database');
@@ -8,6 +10,7 @@ const config = require('./config');
 const Auth = require('./auth'); 
 
 const WEB_PORT = 8080;
+const HTTPS_PORT = 443;
 let serverRef = null;
 
 // Хранилища для ICQ HTTP API
@@ -15,7 +18,7 @@ const HTTP_CHALLENGES = new Map();
 const HTTP_TOKENS = new Map();     
 
 // ═══════════════════════════════════════════
-//  Styles & Templates (Админ-панель)
+//  Styles & Templates
 // ═══════════════════════════════════════════
 
 const CSS = `
@@ -28,13 +31,15 @@ const CSS = `
     td { padding: 10px; border-bottom: 1px solid #334155; }
     .badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
     .online { background: #064e3b; color: #34d399; }
-    .btn { padding: 6px 12px; border: none; border-radius: 4px; cursor: pointer; color: white; display: inline-block; text-decoration: none;}
+    .btn { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; color: white; display: inline-block; text-decoration: none; font-weight: bold;}
     .btn-danger { background: #ef4444; }
     .btn-primary { background: #3b82f6; }
-    input[type=text], textarea { width: 100%; padding: 8px; background: #0f172a; border: 1px solid #334155; color: white; border-radius: 4px; margin-top: 5px; }
+    .btn-primary:hover { background: #2563eb; }
+    input[type=text], input[type=password], textarea { width: 100%; padding: 10px; background: #0f172a; border: 1px solid #334155; color: white; border-radius: 4px; margin-top: 5px; box-sizing: border-box; }
     .nav { display: flex; gap: 10px; margin-bottom: 20px; }
     .nav a { color: #94a3b8; text-decoration: none; padding: 5px 10px; border-radius: 4px; }
     .nav a.active { background: #334155; color: white; }
+    label { color: #94a3b8; font-size: 12px; font-weight: bold; text-transform: uppercase; }
 `;
 
 function layout(title, content) {
@@ -42,10 +47,61 @@ function layout(title, content) {
     <div class="container">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
             <h1>ArtemICQ Admin</h1>
-            <div><a href="/admin" class="btn btn-primary">Dashboard</a></div>
+            <div>
+                <a href="/" class="btn btn-primary" style="margin-right:10px;">Регистрация</a>
+                <a href="/admin" class="btn btn-danger">Admin Panel</a>
+            </div>
         </div>
         ${content}
     </div></body></html>`;
+}
+
+function publicRegistration() {
+    return `
+        <div class="card" style="max-width: 400px; margin: 40px auto;">
+            <h2 style="text-align: center; margin-top: 0;">Получить UIN</h2>
+            <form id="regForm">
+                <div style="margin-bottom: 15px;">
+                    <label>Никнейм (необязательно)</label>
+                    <input type="text" id="regNick" placeholder="Например: Artem">
+                </div>
+                <div style="margin-bottom: 20px;">
+                    <label>Пароль</label>
+                    <input type="password" id="regPass" required placeholder="Придумайте пароль">
+                </div>
+                <button type="submit" id="regBtn" class="btn btn-primary" style="width: 100%; font-size: 16px;">Зарегистрироваться</button>
+            </form>
+            <div id="regResult" style="margin-top: 20px; text-align: center; display: none;"></div>
+        </div>
+        <script>
+            document.getElementById('regForm').addEventListener('submit', async function(e) {
+                e.preventDefault();
+                const btn = document.getElementById('regBtn');
+                const resBox = document.getElementById('regResult');
+                btn.disabled = true; btn.innerText = "Секундочку...";
+                try {
+                    const response = await fetch('/api/register', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ nickname: document.getElementById('regNick').value, password: document.getElementById('regPass').value })
+                    });
+                    const data = await response.json();
+                    if (data.success) {
+                        resBox.style.display = 'block';
+                        resBox.innerHTML = '<span style="color:#94a3b8; font-size:14px;">Ваш новый UIN:</span><br><strong style="font-size:36px; color:#34d399; letter-spacing: 2px;">' + data.uin + '</strong><br><br><span style="color:#e2e8f0; font-size:12px;">Запомните UIN и пароль. Теперь вы можете войти в ICQ клиент.</span>';
+                        document.getElementById('regForm').style.display = 'none';
+                    } else {
+                        resBox.style.display = 'block';
+                        resBox.innerHTML = '<span style="color:#ef4444;">Ошибка: ' + data.error + '</span>';
+                        btn.disabled = false; btn.innerText = "Зарегистрироваться";
+                    }
+                } catch(err) {
+                    resBox.style.display = 'block';
+                    resBox.innerHTML = '<span style="color:#ef4444;">Ошибка соединения с сервером.</span>';
+                    btn.disabled = false; btn.innerText = "Зарегистрироваться";
+                }
+            });
+        </script>
+    `;
 }
 
 async function adminDashboard() {
@@ -68,7 +124,7 @@ async function adminDashboard() {
             <div class="card" style="text-align:center;"><h2 style="font-size:36px;color:#34d399;margin:0;">${onlineCount}</h2><span style="color:#94a3b8;">Online Users</span></div>
             <div class="card" style="text-align:center;"><h2 style="font-size:36px;color:#38bdf8;margin:0;">${totalUsers}</h2><span style="color:#94a3b8;">Registered Accounts</span></div>
         </div>
-        <div class="card"><h2>📢 System Broadcast</h2><form method="POST" action="/admin/broadcast"><textarea name="message" rows="3"></textarea><div style="margin-top:10px;text-align:right;"><button class="btn btn-primary">SEND</button></div></form></div>
+        <div class="card"><h2>📢 System Broadcast</h2><form method="POST" action="/admin/broadcast"><textarea name="message" rows="3" placeholder="Введите сообщение..."></textarea><div style="margin-top:10px;text-align:right;"><button class="btn btn-primary">SEND</button></div></form></div>
         <div class="card"><h2>🟢 Active Sessions</h2><table><thead><tr><th>UIN</th><th>IP</th><th>Status</th><th>Action</th></tr></thead><tbody>${sessionRows}</tbody></table></div>
     `;
 }
@@ -86,9 +142,7 @@ function checkAuth(req, res) {
     const tmp = auth.split(' ');
     const buf = Buffer.from(tmp[1], 'base64');
     const creds = buf.toString().split(':');
-    const credsUser = creds[0];
-    const credsPass = creds[1];
-    return credsUser === config.ADMIN_USER && credsPass === config.ADMIN_PASS;
+    return creds[0] === config.ADMIN_USER && creds[1] === config.ADMIN_PASS;
 }
 
 function requestAuth(res) {
@@ -107,9 +161,7 @@ function parseBody(req) {
                 const params = {};
                 body.split('&').forEach(p => {
                     const kv = p.split('=');
-                    const k = kv[0];
-                    const v = kv[1];
-                    if (k) params[k] = decodeURIComponent((v || '').replace(/\+/g, ' '));
+                    if (kv[0]) params[kv[0]] = decodeURIComponent((kv[1] || '').replace(/\+/g, ' '));
                 });
                 resolve(params);
             }
@@ -125,26 +177,28 @@ async function startWeb(mainServer) {
     serverRef = mainServer;
     await db.init();
 
-    const server = http.createServer(async (req, res) => {
-        // Выносим логику обработки запросов в отдельную функцию, 
-    // чтобы отдавать её и HTTP, и HTTPS серверу
+    // Единый обработчик запросов для HTTP и HTTPS
     const requestHandler = async (req, res) => {
         const u = url.parse(req.url, true);
         const path = (u.pathname || '').replace(/\/$/, ""); 
 
+        // CORS Headers
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
         res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-        if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+        if (req.method === 'OPTIONS') {
+            res.writeHead(204);
+            return res.end();
+        }
 
-        // 0. ПУБЛИЧНАЯ СТРАНИЦА РЕГИСТРАЦИИ
+        // 0. ПУБЛИЧНАЯ СТРАНИЦА РЕГИСТРАЦИИ (HTML)
         if ((path === '' || path === '/' || path === '/register') && req.method === 'GET') {
-            res.writeHead(200, {'Content-Type': 'text/html'});
+            res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
             return res.end(layout('Регистрация ArtemICQ', publicRegistration()));
         }
 
-        // 1. ПУБЛИЧНЫЙ API РЕГИСТРАЦИИ
+        // 1. ПУБЛИЧНЫЙ API РЕГИСТРАЦИИ (POST)
         if (path === '/api/register' && req.method === 'POST') {
             const data = await parseBody(req);
             if (!data.password) {
@@ -159,7 +213,7 @@ async function startWeb(mainServer) {
                 await db.run("INSERT INTO users (uin, password, nickname, email) VALUES (?, ?, ?, ?)",[
                     nextUin.toString(), data.password, data.nickname || '', data.email || ''
                 ]);
-                console.log(`\x1b[32m[WEB API]\x1b[0m Зарегистрирован UIN: ${nextUin}`);
+                console.log(`\x1b[32m[WEB API]\x1b[0m Зарегистрирован новый UIN: ${nextUin}`);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 return res.end(JSON.stringify({ success: true, uin: nextUin.toString() }));
             } catch (err) {
@@ -168,7 +222,7 @@ async function startWeb(mainServer) {
             }
         }
 
-        // 2. ICQ HTTP API (Сюда придет Android)
+        // 2. ICQ HTTP API (Для ICQ 7, 8 и мобильных)
         if (path === '/auth/getChallenge' && req.method === 'POST') {
             const tid = crypto.randomBytes(8).toString('hex');
             const challenge = crypto.randomBytes(8).toString('hex');
@@ -189,7 +243,9 @@ async function startWeb(mainServer) {
                 for (const [tid, challenge] of HTTP_CHALLENGES.entries()) {
                     const expectedHash = crypto.createHmac('sha256', user.password).update(challenge).digest('base64');
                     if (expectedHash === clientPwdHash || user.password === clientPwdHash) {
-                        success = true; HTTP_CHALLENGES.delete(tid); break;
+                        success = true;
+                        HTTP_CHALLENGES.delete(tid);
+                        break;
                     }
                 }
             }
@@ -214,7 +270,11 @@ async function startWeb(mainServer) {
             const uin = HTTP_TOKENS.get(token);
             if (uin) {
                 const cookieBuf = crypto.randomBytes(32);
-                if (Auth && Auth.pendingCookies) Auth.pendingCookies.set(cookieBuf.toString('hex'), uin);
+                const cookieHex = cookieBuf.toString('hex');
+                
+                if (Auth && Auth.pendingCookies) {
+                    Auth.pendingCookies.set(cookieHex, uin);
+                }
 
                 const bosHost = `${config.BOS_ADDRESS || '2.26.61.185'}:${config.BOS_PORT || 5191}`;
                 const xml = `<response xmlns="https://api.oscar.aol.com"><statuscode>200</statuscode><statustext>OK</statustext><data><host>${bosHost}</host><cookie>${cookieBuf.toString('base64')}</cookie></data></response>`;
@@ -229,49 +289,66 @@ async function startWeb(mainServer) {
         // 3. ADMIN PANEL
         if (path.startsWith('/admin')) {
             if (!checkAuth(req, res)) return requestAuth(res);
+
             if (req.method === 'GET') {
                 let content = path === '/admin/users' ? await adminUsers() : await adminDashboard();
-                res.writeHead(200, {'Content-Type': 'text/html'}); return res.end(layout('Admin Panel', content));
+                res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
+                return res.end(layout('Admin Panel', content));
             }
+
             if (req.method === 'POST') {
                 const data = await parseBody(req);
-                if (path === '/admin/kick' && serverRef) { const s = serverRef.sessions.get(data.uin); if (s) s.disconnect(); }
+                if (path === '/admin/kick' && serverRef) {
+                    const session = serverRef.sessions.get(data.uin);
+                    if (session) session.disconnect();
+                }
                 if (path === '/admin/broadcast' && serverRef && data.message) serverRef.broadcast(data.message);
                 if (path === '/admin/delete_user') {
-                    await db.run("DELETE FROM users WHERE uin = ?", [data.uin]); await db.run("DELETE FROM ssi WHERE uin = ?", [data.uin]);
-                    if (serverRef) { const s = serverRef.sessions.get(data.uin); if (s) s.disconnect(); }
+                    await db.run("DELETE FROM users WHERE uin = ?", [data.uin]);
+                    await db.run("DELETE FROM ssi WHERE uin = ?", [data.uin]);
+                    if (serverRef) {
+                        const session = serverRef.sessions.get(data.uin);
+                        if (session) session.disconnect();
+                    }
                 }
                 res.writeHead(302, { 'Location': req.headers.referer || '/admin' });
                 return res.end();
             }
         }
 
-        res.writeHead(404); res.end('Not found');
+        res.writeHead(404);
+        res.end('Not found');
     };
 
     // Запускаем HTTP сервер (Порт 8080)
-    const server = http.createServer(requestHandler);
-    server.listen(WEB_PORT, () => {
+    const httpServer = http.createServer(requestHandler);
+    httpServer.listen(WEB_PORT, () => {
         console.log(`\x1b[1mWEB\x1b[0m HTTP сервер запущен на порту ${WEB_PORT}`);
     });
 
     // Запускаем HTTPS сервер (Порт 443)
     try {
-        const https = require('https');
-        const fs = require('fs');
-        const options = {
-            key: fs.readFileSync('key.pem'),
-            cert: fs.readFileSync('cert.pem')
-        };
-        const httpsServer = https.createServer(options, requestHandler);
-        
-        // Для порта 443 нужны root-права. Если вылетит ошибка - запустите сервер через sudo node server.js
-        httpsServer.listen(443, () => {
-            console.log(`\x1b[1mWEB\x1b[0m HTTPS API запущен на порту 443`);
-        });
+        if (fs.existsSync('key.pem') && fs.existsSync('cert.pem')) {
+            const options = {
+                key: fs.readFileSync('key.pem'),
+                cert: fs.readFileSync('cert.pem')
+            };
+            const httpsServer = https.createServer(options, requestHandler);
+            
+            httpsServer.listen(443, () => {
+                console.log(`\x1b[1mWEB\x1b[0m HTTPS API запущен на порту 443`);
+            }).on('error', (err) => {
+                if (err.code === 'EACCES') {
+                    console.log(`\x1b[33m[WEB]\x1b[0m Нет прав для запуска HTTPS на порту 443 (нужен sudo)`);
+                } else {
+                    console.log(`\x1b[31m[WEB]\x1b[0m Ошибка HTTPS: ${err.message}`);
+                }
+            });
+        } else {
+            console.log(`\x1b[33m[WEB]\x1b[0m Сертификаты (key.pem и cert.pem) не найдены. HTTPS-сервер отключен.`);
+        }
     } catch (e) {
-        console.log(`Registration:  http://{config.HOST}:${WEB_PORT}/`);
-        console.log(`Admin Panel:   http://{config.HOST}:${WEB_PORT}/admin`);
+        console.log(`\x1b[1mWEB\x1b[0m lol at http://localhost:8080/admin`);
     });
 }
 
