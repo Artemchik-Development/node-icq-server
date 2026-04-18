@@ -126,22 +126,25 @@ async function startWeb(mainServer) {
     await db.init();
 
     const server = http.createServer(async (req, res) => {
+        // Выносим логику обработки запросов в отдельную функцию, 
+    // чтобы отдавать её и HTTP, и HTTPS серверу
+    const requestHandler = async (req, res) => {
         const u = url.parse(req.url, true);
         const path = (u.pathname || '').replace(/\/$/, ""); 
 
-        // CORS Headers (позволяет делать запросы с вашего сайта)
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
         res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-        if (req.method === 'OPTIONS') {
-            res.writeHead(204);
-            return res.end();
+        if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+
+        // 0. ПУБЛИЧНАЯ СТРАНИЦА РЕГИСТРАЦИИ
+        if ((path === '' || path === '/' || path === '/register') && req.method === 'GET') {
+            res.writeHead(200, {'Content-Type': 'text/html'});
+            return res.end(layout('Регистрация ArtemICQ', publicRegistration()));
         }
 
-        // ══════════════════════════════════════════════════════════
-        //  1. ПУБЛИЧНАЯ РЕГИСТРАЦИЯ (Вызов с лендинга)
-        // ══════════════════════════════════════════════════════════
+        // 1. ПУБЛИЧНЫЙ API РЕГИСТРАЦИИ
         if (path === '/api/register' && req.method === 'POST') {
             const data = await parseBody(req);
             if (!data.password) {
@@ -156,7 +159,7 @@ async function startWeb(mainServer) {
                 await db.run("INSERT INTO users (uin, password, nickname, email) VALUES (?, ?, ?, ?)",[
                     nextUin.toString(), data.password, data.nickname || '', data.email || ''
                 ]);
-                console.log(`\x1b[32m[WEB API]\x1b[0m Зарегистрирован новый UIN: ${nextUin}`);
+                console.log(`\x1b[32m[WEB API]\x1b[0m Зарегистрирован UIN: ${nextUin}`);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 return res.end(JSON.stringify({ success: true, uin: nextUin.toString() }));
             } catch (err) {
@@ -165,11 +168,7 @@ async function startWeb(mainServer) {
             }
         }
 
-        // ══════════════════════════════════════════════════════════
-        //  2. ICQ HTTP API (Для официальных клиентов)
-        // ══════════════════════════════════════════════════════════
-        
-        // Шаг 1: Выдача соли
+        // 2. ICQ HTTP API (Сюда придет Android)
         if (path === '/auth/getChallenge' && req.method === 'POST') {
             const tid = crypto.randomBytes(8).toString('hex');
             const challenge = crypto.randomBytes(8).toString('hex');
@@ -179,21 +178,18 @@ async function startWeb(mainServer) {
             return res.end(xml);
         }
 
-        // Шаг 2: Проверка пароля и выдача токена
         if (path === '/auth/clientLogin' && req.method === 'POST') {
             const data = await parseBody(req);
             const uin = data.s;
             const clientPwdHash = data.pwd; 
-            const user = await db.get("SELECT * FROM users WHERE uin = ?", [uin]);
+            const user = await db.get("SELECT * FROM users WHERE uin = ?",[uin]);
             let success = false;
 
             if (user && clientPwdHash) {
                 for (const [tid, challenge] of HTTP_CHALLENGES.entries()) {
                     const expectedHash = crypto.createHmac('sha256', user.password).update(challenge).digest('base64');
                     if (expectedHash === clientPwdHash || user.password === clientPwdHash) {
-                        success = true;
-                        HTTP_CHALLENGES.delete(tid);
-                        break;
+                        success = true; HTTP_CHALLENGES.delete(tid); break;
                     }
                 }
             }
@@ -213,18 +209,12 @@ async function startWeb(mainServer) {
             }
         }
 
-        // Шаг 3: Перенаправление на BOS сервер (порт 5191)
         if (path === '/aim/startOSCARSession') {
             const token = u.query.a;
             const uin = HTTP_TOKENS.get(token);
             if (uin) {
                 const cookieBuf = crypto.randomBytes(32);
-                const cookieHex = cookieBuf.toString('hex');
-                
-                // Передаем Cookie в память бинарного сервера через оригинальный Auth
-                if (Auth && Auth.pendingCookies) {
-                    Auth.pendingCookies.set(cookieHex, uin);
-                }
+                if (Auth && Auth.pendingCookies) Auth.pendingCookies.set(cookieBuf.toString('hex'), uin);
 
                 const bosHost = `${config.BOS_ADDRESS || '2.26.61.185'}:${config.BOS_PORT || 5191}`;
                 const xml = `<response xmlns="https://api.oscar.aol.com"><statuscode>200</statuscode><statustext>OK</statustext><data><host>${bosHost}</host><cookie>${cookieBuf.toString('base64')}</cookie></data></response>`;
@@ -236,44 +226,52 @@ async function startWeb(mainServer) {
             }
         }
 
-        // ══════════════════════════════════════════════════════════
-        //  3. ADMIN PANEL
-        // ══════════════════════════════════════════════════════════
+        // 3. ADMIN PANEL
         if (path.startsWith('/admin')) {
             if (!checkAuth(req, res)) return requestAuth(res);
-
             if (req.method === 'GET') {
                 let content = path === '/admin/users' ? await adminUsers() : await adminDashboard();
-                res.writeHead(200, {'Content-Type': 'text/html'});
-                return res.end(layout('Admin Panel', content));
+                res.writeHead(200, {'Content-Type': 'text/html'}); return res.end(layout('Admin Panel', content));
             }
-
             if (req.method === 'POST') {
                 const data = await parseBody(req);
-                if (path === '/admin/kick' && serverRef) {
-                    const session = serverRef.sessions.get(data.uin);
-                    if (session) session.disconnect();
-                }
+                if (path === '/admin/kick' && serverRef) { const s = serverRef.sessions.get(data.uin); if (s) s.disconnect(); }
                 if (path === '/admin/broadcast' && serverRef && data.message) serverRef.broadcast(data.message);
                 if (path === '/admin/delete_user') {
-                    await db.run("DELETE FROM users WHERE uin = ?", [data.uin]);
-                    await db.run("DELETE FROM ssi WHERE uin = ?", [data.uin]);
-                    if (serverRef) {
-                        const session = serverRef.sessions.get(data.uin);
-                        if (session) session.disconnect();
-                    }
+                    await db.run("DELETE FROM users WHERE uin = ?", [data.uin]); await db.run("DELETE FROM ssi WHERE uin = ?", [data.uin]);
+                    if (serverRef) { const s = serverRef.sessions.get(data.uin); if (s) s.disconnect(); }
                 }
                 res.writeHead(302, { 'Location': req.headers.referer || '/admin' });
                 return res.end();
             }
         }
 
-        res.writeHead(404);
-        res.end('Not found');
+        res.writeHead(404); res.end('Not found');
+    };
+
+    // Запускаем HTTP сервер (Порт 8080)
+    const server = http.createServer(requestHandler);
+    server.listen(WEB_PORT, () => {
+        console.log(`\x1b[1mWEB\x1b[0m HTTP сервер запущен на порту ${WEB_PORT}`);
     });
 
-    server.listen(WEB_PORT, () => {
-        console.log(`\x1b[1mWEB\x1b[0m server running on \x1b[36mhttp://localhost:${WEB_PORT}\x1b[0m`);
+    // Запускаем HTTPS сервер (Порт 443)
+    try {
+        const https = require('https');
+        const fs = require('fs');
+        const options = {
+            key: fs.readFileSync('key.pem'),
+            cert: fs.readFileSync('cert.pem')
+        };
+        const httpsServer = https.createServer(options, requestHandler);
+        
+        // Для порта 443 нужны root-права. Если вылетит ошибка - запустите сервер через sudo node server.js
+        httpsServer.listen(443, () => {
+            console.log(`\x1b[1mWEB\x1b[0m HTTPS API запущен на порту 443`);
+        });
+    } catch (e) {
+        console.log(`\x1b[33m[WEB]\x1b
+        [0m server running on \x1b[36mhttp://localhost:${WEB_PORT}\x1b[0m`);
         console.log(`      Registration:  http://{config.HOST}:${WEB_PORT}/`);
         console.log(`      Admin Panel:   http://{config.HOST}:${WEB_PORT}/admin`);
     });
