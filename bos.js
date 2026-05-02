@@ -33,7 +33,6 @@ function parseSSIItems(data) {
         const iid = data.readUInt16BE(pos); pos += 2;
         const type = data.readUInt16BE(pos); pos += 2;
         const tlvLen = data.readUInt16BE(pos); pos += 2;
-        
         let tlvData = null;
         if (tlvLen > 0) {
             if (pos + tlvLen > data.length) break;
@@ -59,6 +58,15 @@ function writeLTLV(type, buf) {
     return Buffer.concat([head, buf]);
 }
 
+// ИСПРАВЛЕНИЕ: Формирование строки внутри "Матрешки" LTLV
+function writeLTLVString(type, str) {
+    const sBuf = Buffer.from((str || '') + '\0', 'utf8');
+    const valBuf = Buffer.alloc(2 + sBuf.length);
+    valBuf.writeUInt16LE(sBuf.length, 0); // Внутренняя длина строки
+    sBuf.copy(valBuf, 2);
+    return writeLTLV(type, valBuf);
+}
+
 function buildICBMParams() {
     return new OscarBuilder().u16(0x0000).u32(0x0000000B).u16(8000).u16(999).u16(999).u32(0).u16(0).build();
 }
@@ -66,6 +74,10 @@ function buildICBMParams() {
 function mergeTLVs(session, rawTlvs) {
     for (const key of Object.keys(rawTlvs)) session.userTLVs.set(Number(key), rawTlvs[Number(key)]);
 }
+
+// ═══════════════════════════════════════════
+//  Главный обработчик BOS
+// ═══════════════════════════════════════════
 
 const BOS = {
     async handlePacket(session, snac, context) {
@@ -87,6 +99,18 @@ const BOS = {
         const { subtype, reqId } = snac;
         if (subtype === 0x0002) {
             console.log(`\x1b[32m[READY]\x1b[0m ${session.uin}`);
+            
+            if (!session.dbChecked) {
+                session.dbChecked = true;
+                const cols =['profile','awayMsg','firstname','lastname','city','phone','homepage','about','gender','age','nickname','email'];
+                for(const c of cols) { try { await db.run(`ALTER TABLE users ADD COLUMN ${c} TEXT`); } catch(e){} }
+            }
+
+            try {
+                const me = await db.searchByUIN(session.uin);
+                if (me) { session.profile = me.about || ''; session.awayMsg = me.awayMsg || ''; }
+            } catch(e) {}
+
             session.sendSNAC(0x0001, 0x000F, 0, 0, packUserInfoOnline(session));
             const offline = await db.getOffline(session.uin);
             for (const msg of offline) session.sendSNAC(0x0004, 0x0007, 0, 0, this.buildIncomingMsg(msg.sender, msg.message, msg.ts));
@@ -117,7 +141,7 @@ const BOS = {
     buildRateResponse() {
         const b = new OscarBuilder();
         b.u16(1).u16(0x0001).u32(80).u32(2500).u32(2000).u32(1500).u32(1000).u32(2500).u32(6000).u32(0).u8(0);
-        const pairs = [];
+        const pairs =[];
         const families = {
             0x0001:[0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x0E,0x0F,0x11,0x13,0x17,0x18,0x1E],
             0x0002:[0x01,0x02,0x03,0x04,0x05,0x06], 0x0003:[0x01,0x02,0x03,0x04,0x05,0x0B,0x0C],
@@ -125,18 +149,18 @@ const BOS = {
             0x0013:[0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0A,0x0E,0x0F,0x11,0x12],
             0x0015:[0x01,0x02,0x03],
         };
-        for (const[fam, subs] of Object.entries(families)) for (const sub of subs) pairs.push([parseInt(fam), sub]);
+        for (const [fam, subs] of Object.entries(families)) for (const sub of subs) pairs.push([parseInt(fam), sub]);
         b.u16(0x0001).u16(pairs.length); pairs.forEach(([f, s]) => b.u16(f).u16(s));
         return b.build();
     },
 
     async notifyWatchers(session, sessions, online) {
         const targetUin = session.uin;
-        for (const [uin, ws] of sessions) {
+        for (const[uin, ws] of sessions) {
             if (uin === targetUin || !ws.watching.has(targetUin)) continue;
             ws.sendSNAC(0x0003, online ? 0x000B : 0x000C, 0, 0, online ? packUserInfoOnline(session) : packUserInfoOffline(targetUin));
         }
-        const ssiWatchers = await db.all("SELECT DISTINCT uin FROM ssi WHERE name = ? AND type = 0", [targetUin]);
+        const ssiWatchers = await db.all("SELECT DISTINCT uin FROM ssi WHERE name = ? AND type = 0",[targetUin]);
         for (const row of ssiWatchers) {
             const ws = sessions.get(row.uin);
             if (ws && !ws.watching.has(targetUin)) {
@@ -156,22 +180,38 @@ const BOS = {
     async handleLocate(session, snac, ctx) {
         const { subtype, reqId } = snac;
         if (subtype === 0x0002) session.sendSNAC(0x0002, 0x0003, 0, reqId, new OscarBuilder().tlv(0x0001, 0x0400).tlv(0x0002, 0x0010).tlv(0x0005, 0x000A).build());
+        
         if (subtype === 0x0004) {
             const tlvs = parseTLVs(snac.data);
-            if (tlvs[0x0002]) session.profile = tlvs[0x0002].toString();
-            if (tlvs[0x0004]) session.awayMsg = tlvs[0x0004].toString();
+            if (tlvs[0x0002]) { 
+                session.profile = tlvs[0x0002].toString('utf8'); 
+                try { await db.run("UPDATE users SET about = ? WHERE uin = ?",[session.profile, session.uin]); } catch(e){}
+            }
+            if (tlvs[0x0004]) { 
+                session.awayMsg = tlvs[0x0004].toString('utf8'); 
+                try { await db.run("UPDATE users SET awayMsg = ? WHERE uin = ?", [session.awayMsg, session.uin]); } catch(e){}
+            }
             if (tlvs[0x0005]) { session.userTLVs.set(0x000D, tlvs[0x0005]); await this.notifyWatchers(session, ctx.sessions, true); }
         }
+        
         if (subtype === 0x0005 && snac.data.length >= 3) {
             const flags = snac.data.readUInt16BE(0); const targetUin = snac.data.subarray(3, 3 + snac.data[2]).toString();
             const ts = ctx.sessions.get(targetUin);
+            const userDb = await db.searchByUIN(targetUin); 
+
             const b = new OscarBuilder(); const tb = Buffer.from(targetUin); b.u8(tb.length).raw(tb).u16(0);
+            
+            const infoPairs =[]; 
             if (ts) {
-                const infoPairs =[]; for (const[type, value] of ts.userTLVs) infoPairs.push([type, value]);
-                infoPairs.push([0x0002, Buffer.from(ts.profile || `UIN: ${targetUin}`)]);
+                for (const[type, value] of ts.userTLVs) infoPairs.push([type, value]);
+                infoPairs.push([0x0002, Buffer.from(ts.profile || (userDb ? userDb.about : '') || `UIN: ${targetUin}`)]);
                 if (flags & 0x0002) infoPairs.push([0x0004, Buffer.from(ts.awayMsg || '')]);
-                b.u16(infoPairs.length); infoPairs.forEach(([t, v]) => b.tlv(t, v));
-            } else { b.u16(2).tlv(0x0001, Buffer.from([0x00, 0x40])).tlv(0x0002, `UIN: ${targetUin}`); }
+            } else {
+                infoPairs.push([0x0001, Buffer.from([0x00, 0x40])]);
+                infoPairs.push([0x0002, Buffer.from(userDb ? (userDb.about || '') : `UIN: ${targetUin}`)]);
+                if (flags & 0x0002) infoPairs.push([0x0004, Buffer.from('')]);
+            }
+            b.u16(infoPairs.length); infoPairs.forEach(([t, v]) => b.tlv(t, v));
             session.sendSNAC(0x0002, 0x0006, 0, reqId, b.build());
         }
     },
@@ -188,7 +228,7 @@ const BOS = {
             }
         }
     },
-    
+
     async handleICBM(session, snac, ctx) {
         if (snac.subtype === 0x0004 || snac.subtype === 0x0002) return session.sendSNAC(0x0004, 0x0005, 0, snac.reqId, buildICBMParams());
         if (snac.subtype === 0x0006) {
@@ -196,12 +236,19 @@ const BOS = {
             const cookie = d.subarray(0, 8); const channel = d.readUInt16BE(8); const uinLen = d[10];
             const recipient = d.subarray(11, 11 + uinLen).toString('utf8'); const tlvs = parseTLVs(d.subarray(11 + uinLen));
             const target = ctx.sessions.get(recipient);
-            
+
+            // ИСПРАВЛЕНИЕ INFIUM: Проброс всех TLV параметров (XML плагины, Typing Status)
             if (channel === 2) {
                 if (target) {
                     const b = new OscarBuilder().raw(cookie).u16(channel).u8(session.uin.length).string(session.uin)
-                             .u16(0).u16(2).tlv(0x01, Buffer.from([0x00, 0x40])).tlv(0x06, session.userTLVs.get(0x0006) || Buffer.from([0,0,0,0]));
-                    if (tlvs[0x05]) b.tlv(0x05, tlvs[0x05]); // QIP шлет статусы в TLV 05
+                             .u16(0).u16(3).tlv(0x01, Buffer.from([0x00, 0x40])).tlv(0x06, session.userTLVs.get(0x0006) || Buffer.from([0,0,0,0])).tlv(0x03, session.userTLVs.get(0x0003) || Buffer.alloc(4));
+                    
+                    // Пересылаем все TLV, которые клиент вложил (кроме самого сообщения), чтобы плагины работали
+                    for (const [t, v] of Object.entries(tlvs)) {
+                        if (t !== '5' && t !== '2') b.tlv(parseInt(t), v); 
+                    }
+                    if (tlvs[0x05]) b.tlv(0x05, tlvs[0x05]);
+                    
                     target.sendSNAC(0x04, 0x07, 0, 0, b.build());
                 }
                 return;
@@ -221,19 +268,19 @@ const BOS = {
             console.log(`\x1b[32m[MSG]\x1b[0m ${session.uin} → ${recipient} : ${msgText}`);
 
             if (target) {
+                let tlv02 = tlvs[0x0002];
+                if (channel === 1 && msgText) {
+                    const textBuf = Buffer.from(msgText, 'utf8');
+                    const msgBody = Buffer.concat([Buffer.alloc(4), textBuf]);
+                    const msgHeader = Buffer.alloc(4); msgHeader[0] = 0x01; msgHeader[1] = 0x01; msgHeader.writeUInt16BE(msgBody.length, 2);
+                    tlv02 = Buffer.concat([Buffer.from([0x05, 0x01, 0x00, 0x04, 0x01, 0x01, 0x01, 0x02]), msgHeader, msgBody]);
+                }
                 const b = new OscarBuilder().raw(cookie).u16(channel).u8(Buffer.from(session.uin).length).string(session.uin)
-                         .u16(0).u16(2) // Ровно 2 TLV (Class, Status)
-                         .tlv(0x01, Buffer.from([0x00, 0x40]))
-                         .tlv(0x06, session.userTLVs.get(0x0006) || Buffer.from([0,0,0,0]));
-                
-                if (tlvs[0x0002]) b.tlv(0x0002, tlvs[0x0002]); 
-                if (tlvs[0x0005]) b.tlv(0x0005, tlvs[0x0005]);
-                
-                target.sendSNAC(0x0004, 0x0007, 0, 0, b.build());
+                         .u16(0).u16(3).tlv(0x01, Buffer.from([0x00, 0x40])).tlv(0x06, session.userTLVs.get(0x0006) || Buffer.from([0,0,0,0])).tlv(0x03, session.userTLVs.get(0x0003) || Buffer.alloc(4));
+                if (tlv02) b.tlv(0x02, tlv02); if (tlvs[0x0005]) b.tlv(0x0005, tlvs[0x0005]);
+                target.sendSNAC(0x04, 0x07, 0, 0, b.build());
                 if (tlvs[0x0003]) session.sendSNAC(0x0004, 0x000C, 0, snac.reqId, new OscarBuilder().raw(cookie).u16(channel).u8(recipient.length).string(recipient).build());
-            } else if (msgText) {
-                await db.storeOffline(session.uin, recipient, msgText);
-            }
+            } else if (msgText) await db.storeOffline(session.uin, recipient, msgText);
         }
     },
 
@@ -241,13 +288,14 @@ const BOS = {
         const cookie = Buffer.alloc(8); cookie.writeUInt32BE(Math.floor(Math.random() * 0xFFFFFFFF), 0); cookie.writeUInt32BE(Math.floor(ts || Date.now() / 1000), 4);
         const msgBody = Buffer.concat([Buffer.alloc(4), Buffer.from(text, 'utf8')]);
         const msgHeader = Buffer.alloc(4); msgHeader[0] = 0x01; msgHeader[1] = 0x01; msgHeader.writeUInt16BE(msgBody.length, 2);
-        return new OscarBuilder().raw(cookie).u16(1).u8(senderUin.length).string(senderUin).u16(0).u16(2).tlv(0x0001, Buffer.from([0x00, 0x40])).tlv(0x0006, Buffer.from([0, 0, 0, 0])).tlv(0x0002, Buffer.concat([Buffer.from([0x05, 0x01, 0x00, 0x04, 0x01, 0x01, 0x01, 0x02]), msgHeader, msgBody])).build();
+        const signonTime = Buffer.alloc(4); signonTime.writeUInt32BE(Math.floor(Date.now() / 1000));
+        return new OscarBuilder().raw(cookie).u16(1).u8(senderUin.length).string(senderUin).u16(0).u16(3).tlv(0x0001, Buffer.from([0x00, 0x40])).tlv(0x0006, Buffer.from([0, 0, 0, 0])).tlv(0x0003, signonTime).tlv(0x0002, Buffer.concat([Buffer.from([0x05, 0x01, 0x00, 0x04, 0x01, 0x01, 0x01, 0x02]), msgHeader, msgBody])).build();
     },
 
     handlePrivacy(session, snac) {
         if (snac.subtype === 0x0002) session.sendSNAC(0x0009, 0x0003, 0, snac.reqId, new OscarBuilder().tlv(0x0001, 200).tlv(0x0002, 200).build());
     },
-    
+
     async handleSSI(session, snac, ctx) {
         if (snac.subtype === 0x0002) session.sendSNAC(0x0013, 0x0003, 0, snac.reqId, new OscarBuilder().tlv(0x0004, 1000).tlv(0x0005, 100).tlv(0x0006, 200).tlv(0x0007, 200).tlv(0x0008, 200).build());
         
@@ -276,11 +324,8 @@ const BOS = {
         if (snac.subtype === 0x0007) { await this.sendBuddyStatuses(session, ctx.sessions); await this.notifyWatchers(session, ctx.sessions, true); }
         
         if (snac.subtype === 0x0008 || snac.subtype === 0x0009 || snac.subtype === 0x000A) {
-            const items = parseSSIItems(snac.data); 
-            const results =[];
-
+            const items = parseSSIItems(snac.data); const results =[];
             try { await db.run("ALTER TABLE ssi ADD COLUMN tlv BLOB"); } catch(e) {}
-
             for (const item of items) {
                 const tlvBlob = item.tlvData ? Buffer.from(item.tlvData) : null;
                 try {
@@ -301,7 +346,7 @@ const BOS = {
     },
 
     // ═══════════════════════════════════════════════
-    //  ICQ ADVANCED DATA
+    //  ICQ ADVANCED DATA & FULL INFO
     // ═══════════════════════════════════════════════
 
     async handleICQ(session, snac, ctx) {
@@ -328,34 +373,109 @@ const BOS = {
             const subCmd = subData.readUInt16LE(0);
             const metaData = subData.subarray(2);
 
-            let sqlQuery = "", sqlParam = "";
+            // 1. ПОЛУЧЕНИЕ ИНФОРМАЦИИ (Get Info)
+            if (subCmd === 0x04BA || subCmd === 0x04B2 || subCmd === 0x051F) {
+                let targetUin = session.uin;
+                if (metaData.length >= 4) { const v = metaData.readUInt32LE(0); if (v > 0) targetUin = v.toString(); }
+                const user = await db.searchByUIN(targetUin);
+                
+                if (subCmd === 0x04B2) {
+                    // КРАТКАЯ ИНФОРМАЦИЯ
+                    const bufs =[Buffer.from([0x0A])]; 
+                    if (user) {
+                        bufs.push(writeLNTS(user.nickname));
+                        bufs.push(writeLNTS(user.firstname));
+                        bufs.push(writeLNTS(user.lastname));
+                        bufs.push(writeLNTS(user.email));
+                        bufs.push(Buffer.from([0x00])); 
+                        bufs.push(Buffer.from([0x00, 0x00])); 
+                        bufs.push(Buffer.from([user.gender ? parseInt(user.gender) : 0])); 
+                        bufs.push(Buffer.from([0x00, 0x00])); 
+                    } else {
+                        bufs.push(writeLNTS('Unknown')); bufs.push(writeLNTS('')); bufs.push(writeLNTS('')); bufs.push(writeLNTS(''));
+                        bufs.push(Buffer.from([0x00, 0x00, 0x00, 0x00, 0x00, 0x00]));
+                    }
+                    this.sendICQMetaReply(session, snac.reqId, ownerUin, seq, 0x00BA, Buffer.concat(bufs));
+                } else {
+                    // ПОЛНАЯ АНКЕТА (ИСПРАВЛЕНИЕ: LTLV со встроенной длиной строки)
+                    const bufs =[Buffer.from([0x0A])];
+                    if (user) {
+                        // UIN отправляется как DWORD
+                        const uinBuf = Buffer.alloc(4); uinBuf.writeUInt32LE(parseInt(user.uin) || 0);
+                        bufs.push(writeLTLV(310, uinBuf));
+                        
+                        if (user.nickname) bufs.push(writeLTLVString(340, user.nickname));
+                        if (user.firstname) bufs.push(writeLTLVString(350, user.firstname));
+                        if (user.lastname) bufs.push(writeLTLVString(360, user.lastname));
+                        if (user.email) bufs.push(writeLTLVString(370, user.email));
+                        if (user.city) bufs.push(writeLTLVString(380, user.city));
+                        if (user.phone) bufs.push(writeLTLVString(400, user.phone));
+                        if (user.homepage) bufs.push(writeLTLVString(580, user.homepage));
+                        if (user.about) bufs.push(writeLTLVString(700, user.about));
+                        
+                        if (user.gender) { const gb = Buffer.alloc(1); gb.writeUInt8(parseInt(user.gender)); bufs.push(writeLTLV(560, gb)); }
+                        if (user.age) { const ab = Buffer.alloc(2); ab.writeUInt16LE(parseInt(user.age)); bufs.push(writeLTLV(550, ab)); }
+                    }
+                    this.sendICQMetaReply(session, snac.reqId, ownerUin, seq, 0x0118, Buffer.concat(bufs));
+                }
+                return;
+            }
+            
+            // 2. СОХРАНЕНИЕ АНКЕТЫ (Set Info)
+            if (subCmd === 0x0C3A || subCmd === 0x0D0E) {
+                let pos = 0; const updates = {};
+                while(pos + 4 <= metaData.length) {
+                    const tType = metaData.readUInt16LE(pos); const tLen = metaData.readUInt16LE(pos+2); pos += 4;
+                    if (tLen > 0 && pos + tLen <= metaData.length) {
+                        const valBuf = metaData.subarray(pos, pos+tLen);
+                        let strVal = '';
+                        // ИСПРАВЛЕНИЕ: строка идет после 2 байт своей собственной длины
+                        if (tLen > 2) strVal = valBuf.subarray(2).toString('utf8').replace(/\0/g, '').trim();
 
+                        if (tType === 340) updates.nickname = strVal;
+                        if (tType === 350) updates.firstname = strVal;
+                        if (tType === 360) updates.lastname = strVal;
+                        if (tType === 370) updates.email = strVal;
+                        if (tType === 380) updates.city = strVal;
+                        if (tType === 400) updates.phone = strVal;
+                        if (tType === 550 && tLen >= 2) updates.age = valBuf.readUInt16LE(0);
+                        if (tType === 560 && tLen >= 1) updates.gender = valBuf.readUInt8(0);
+                        if (tType === 580) updates.homepage = strVal;
+                        if (tType === 700) updates.about = strVal;
+                    }
+                    pos += tLen;
+                }
+
+                const keys = Object.keys(updates);
+                if (keys.length > 0) {
+                    const setStr = keys.map(k => `${k} = ?`).join(', ');
+                    const values = keys.map(k => updates[k]); values.push(session.uin);
+                    try { await db.run(`UPDATE users SET ${setStr} WHERE uin = ?`, values); } catch(e) {}
+                }
+                this.sendICQMetaReply(session, snac.reqId, ownerUin, seq, 0x0C3F, Buffer.from([0x0A])); 
+                console.log(`\x1b[35m[ПРОФИЛЬ]\x1b[0m ${session.uin} обновил анкету:`, Object.keys(updates));
+                return;
+            }
+
+            // 3. ПОИСК (QIP 2005 / INFIUM)
+            let sqlQuery = "", sqlParam = "";
             if (subCmd === 0x0569 && metaData.length >= 8) { 
-                sqlParam = metaData.readUInt32LE(4).toString();
-                sqlQuery = "SELECT * FROM users WHERE uin = ?";
+                sqlParam = metaData.readUInt32LE(4).toString(); sqlQuery = "SELECT * FROM users WHERE uin = ?";
             } 
             else if (subCmd === 0x055F || subCmd === 0x0FA0) { 
                 const clean = metaData.toString('utf8').replace(/[^\x20-\x7E\u0400-\u04FF]/g, ' ').trim();
-                const parts = clean.split(/\s+/);
-                sqlParam = parts[parts.length - 1] || '';
-                
+                const parts = clean.split(/\s+/); sqlParam = parts[parts.length - 1] || '';
                 if (sqlParam) {
                     if (/^\d+$/.test(sqlParam)) sqlQuery = "SELECT * FROM users WHERE uin = ?";
                     else if (sqlParam.includes('@')) sqlQuery = "SELECT * FROM users WHERE email = ?";
                     else sqlQuery = "SELECT * FROM users WHERE nickname = ?";
                 }
             } 
-            else if (subCmd === 0x04BA || subCmd === 0x04B2 || subCmd === 0x051F) {
-                let targetUin = session.uin;
-                if (metaData.length >= 4) { const v = metaData.readUInt32LE(0); if (v > 0) targetUin = v.toString(); }
-                const user = await db.searchByUIN(targetUin);
-                const bufs = [Buffer.from([0x0A])];
-                if (user) { bufs.push(writeLNTS(user.nickname)); bufs.push(writeLNTS(user.firstname)); bufs.push(writeLNTS(user.lastname)); bufs.push(writeLNTS(user.email)); bufs.push(Buffer.from([0,0,0])); }
-                else { bufs.push(writeLNTS('Unknown')); bufs.push(writeLNTS('')); bufs.push(writeLNTS('')); bufs.push(writeLNTS('')); bufs.push(Buffer.from([0,0,0])); }
-                this.sendICQMetaReply(session, snac.reqId, ownerUin, seq, subCmd === 0x04BA ? 0x0104 : 0x00FB, Buffer.concat(bufs));
-                return;
+            else {
+                // ВОССТАНОВЛЕНО: Отвечаем на неизвестные команды плагинов (чтобы Infium не зависал при логине)
+                this.sendICQMetaReply(session, snac.reqId, ownerUin, seq, subCmd + 1, Buffer.from([0x00]));
+                return; 
             }
-            else { return; }
 
             if (sqlQuery && sqlParam) {
                 console.log(`\x1b[35m[QIP SEARCH]\x1b[0m ${session.uin} ищет: "${sqlParam}"`);
@@ -376,34 +496,30 @@ const BOS = {
     },
 
     sendQip2005SearchResult(session, reqId, ownerUin, seq, users) {
-        if (!users || users.length === 0) {
-            this.sendICQMetaReply(session, reqId, ownerUin, seq, 0x01AE, Buffer.from([0x0A, 0x00, 0x00])); 
-            return;
-        }
+        if (!users || users.length === 0) return this.sendICQMetaReply(session, reqId, ownerUin, seq, 0x01AE, Buffer.from([0x0A, 0x00, 0x00])); 
         const bufs =[]; bufs.push(Buffer.from([0x0A])); 
         const countBuf = Buffer.alloc(2); countBuf.writeUInt16LE(users.length); bufs.push(countBuf); 
         for (const user of users) {
             const uinBuf = Buffer.alloc(4); uinBuf.writeUInt32LE(parseInt(user.uin) || 0); bufs.push(uinBuf);
-            bufs.push(writeLNTS(user.nickname)); bufs.push(writeLNTS(user.firstname));
-            bufs.push(writeLNTS(user.lastname)); bufs.push(writeLNTS(user.email));
+            bufs.push(writeLNTS(user.nickname)); bufs.push(writeLNTS(user.firstname)); bufs.push(writeLNTS(user.lastname)); bufs.push(writeLNTS(user.email));
             bufs.push(Buffer.from([0x00])); bufs.push(Buffer.alloc(2)); bufs.push(Buffer.from([user.gender || 0])); bufs.push(Buffer.alloc(2));
         }
         this.sendICQMetaReply(session, reqId, ownerUin, seq, 0x01AE, Buffer.concat(bufs));
     },
 
     sendInfiumSearchResult(session, reqId, ownerUin, seq, users) {
-        if (!users || users.length === 0) {
-            this.sendICQMetaReply(session, reqId, ownerUin, seq, 0x0FA1, Buffer.alloc(0)); 
-            return;
-        }
+        if (!users || users.length === 0) return this.sendICQMetaReply(session, reqId, ownerUin, seq, 0x0FA1, Buffer.alloc(0)); 
         for (const user of users) {
             const bufs =[]; const uinBuf = Buffer.alloc(4); uinBuf.writeUInt32LE(parseInt(user.uin) || 0);
             bufs.push(writeLTLV(0x0136, uinBuf)); 
-            if (user.nickname) bufs.push(writeLTLV(0x0154, Buffer.from(user.nickname, 'utf8'))); 
-            if (user.firstname) bufs.push(writeLTLV(0x015E, Buffer.from(user.firstname, 'utf8'))); 
-            if (user.lastname) bufs.push(writeLTLV(0x0168, Buffer.from(user.lastname, 'utf8'))); 
-            if (user.email) bufs.push(writeLTLV(0x0172, Buffer.from(user.email, 'utf8'))); 
+            
+            // ИСПРАВЛЕНИЕ: Использование правильного конвертера строк с префиксом длины
+            if (user.nickname) bufs.push(writeLTLVString(0x0154, user.nickname)); 
+            if (user.firstname) bufs.push(writeLTLVString(0x015E, user.firstname)); 
+            if (user.lastname) bufs.push(writeLTLVString(0x0168, user.lastname)); 
+            if (user.email) bufs.push(writeLTLVString(0x0172, user.email)); 
             bufs.push(writeLTLV(0x0212, Buffer.from([0x00]))); 
+            
             this.sendICQMetaReply(session, reqId, ownerUin, seq, 0x0FA1, Buffer.concat(bufs));
         }
         this.sendICQMetaReply(session, reqId, ownerUin, seq, 0x0FA1, Buffer.alloc(0));
